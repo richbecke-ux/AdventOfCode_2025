@@ -1,3 +1,5 @@
+package aoc2025
+
 class LockDial {
     int size,
         position,
@@ -32,14 +34,12 @@ R14
 L82'''
 
 LockDial dial = new LockDial (size: 100, position: 50)
-try {
+
     new File(args[0]).eachLine { String line ->
         //   new StringReader (testInput).eachLine { String line ->
         if ("RL".contains (line.charAt(0) as String)) {
             dial.rotate (line)
         }
     }
-} catch (IOException e) {
-    println "Error reading file: $e.message"
-}
+
 println "Stops at zero position: $dial.zeroStops, total number of times at zero position: $dial.zeroPasses"

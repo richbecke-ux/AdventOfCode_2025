@@ -1,3 +1,5 @@
+package aoc2025
+
 class Range {
     long rangeStart, rangeEnd, sum = 0
 
