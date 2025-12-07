@@ -1,21 +1,18 @@
 package aoc2025
 
-class BatteryBank {
-    long max
-
-    BatteryBank(String spec, int activeCells) {
-        def digitPos = (0..<activeCells).inject([]) { pos, i ->
-            def start = pos ? pos[-1] + 1 : 0
-            def end = spec.length() - activeCells + i
-            pos << (start..end).max { spec[it] }
-        }
-        max = digitPos.collect { spec[it] }.join() as long
+long calcBankMax(String spec, int activeCells) {
+    def digitPos = (0..<activeCells).inject([]) { pos, i ->
+        def start = pos ? pos[-1] + 1 : 0
+        def end = spec.length() - activeCells + i
+        pos << (start..end).max { spec[it] }
     }
+    digitPos.collect { spec[it] }.join() as long
 }
 
+
 new File(args[0]).readLines().with { lines ->
-    println "Total joltage part 1: " + lines.sum { new BatteryBank(it.trim(), 2).max }
-    println "Total joltage part 2: " + lines.sum { new BatteryBank(it.trim(), 12).max }
+    println "Total joltage part 1: " + lines.sum { calcBankMax(it.trim(), 2) }
+    println "Total joltage part 2: " + lines.sum { calcBankMax(it.trim(), 12) }
 }
 
 /*
