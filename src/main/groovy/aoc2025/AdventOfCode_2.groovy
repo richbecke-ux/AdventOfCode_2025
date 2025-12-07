@@ -7,10 +7,10 @@ class Range {
 
     List<Integer> findDivisors(int num) { (1..<num).findAll { num % it == 0 } }
 
-    boolean isRepeating(long value, int digits) {
-        if (digits == 1) return false
+    boolean isPrimitive(long value, int digits) {
+        if (digits == 1) return true
         def valStr = value as String
-        findDivisors(digits).any { div ->
+        !findDivisors(digits).any { div ->
             valStr[0..<div] * (digits/div) == valStr
         }
     }
@@ -21,7 +21,7 @@ class Range {
         findDivisors(digits).each { div ->
             def (secStart, secEnd) = [startStr, endStr].collect { it[0..<div] as long }
             (secStart..secEnd).each { i ->
-                if (!isRepeating(i, div)) {
+                if (isPrimitive(i, div)) {
                     def section = i as String
                     def canvas = section * (digits.intdiv(div))
                     def num = canvas as long
