@@ -22,13 +22,12 @@ class Range {
             def (secStart, secEnd) = [startStr, endStr].collect { it[0..<div] as long }
             (secStart..secEnd).each { i ->
                 if (isPrimitive(i, div)) {
-                    def section = i as String
-                    def canvas = section * (digits.intdiv(div))
-                    def num = canvas as long
-                    if (inRange(num)) {
-                        sum_2 += num
-                        if ((digits % 2 == 0) && (canvas[0..<(digits/2)] == canvas[(digits/2)..<digits])) {
-                            sum_1 += num
+                    def canvas = i as String * (digits.intdiv(div))
+                    def idNum = canvas as long
+                    if (inRange(idNum)) {
+                        sum_2 += idNum
+                        if ((digits % 2 == 0) && (div * 2 == digits || canvas[0..<(digits/2)] == canvas[(digits/2)..<digits])) {
+                            sum_1 += idNum
                         }
                     }
                 }
