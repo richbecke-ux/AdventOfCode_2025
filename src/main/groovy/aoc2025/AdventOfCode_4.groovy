@@ -3,7 +3,6 @@ package aoc2025
 import groovy.transform.Field
 
 @Field def floorMap = []
-long movable = 0
 @Field int width, height
 
 def isRollInPos (int y, int x) {
@@ -47,18 +46,19 @@ input.eachLine { String line ->
 
 width = floorMap[0].size()
 height = floorMap.size()
+def total = 0
 
 for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
         if (floorMap[y][x] == "@" && countNeighborRolls(y, x) < 4) {
-            ++movable
+            ++total
         }
     }
 }
 
-println "Part 1 movable rolls: $movable"
+println "Part 1 movable rolls: $total"
 
-movable = 0
+total = 0
 def moved
 do {
     moved = 0
@@ -70,7 +70,7 @@ do {
             }
         }
     }
-    movable += moved
+    total += moved
 } while (moved > 0)
 
-println "Part 2 movable rolls: $movable"
+println "Part 2 movable rolls: $total"
