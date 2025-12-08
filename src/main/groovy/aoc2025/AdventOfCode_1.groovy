@@ -35,11 +35,11 @@ L82'''
 
 LockDial dial = new LockDial (size: 100, position: 50)
 
-    new File(args[0]).eachLine { String line ->
-        //   new StringReader (testInput).eachLine { String line ->
-        if ("RL".contains (line.charAt(0) as String)) {
-            dial.rotate (line)
-        }
+new File(args[0]).eachLine { String line ->
+    //   new StringReader (testInput).eachLine { String line ->
+    if ("RL".contains (line.charAt(0) as String)) {
+        dial.rotate (line)
     }
+}
 
 println "Stops at zero position: $dial.zeroStops, total number of times at zero position: $dial.zeroPasses"
