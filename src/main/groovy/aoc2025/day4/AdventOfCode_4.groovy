@@ -1,4 +1,4 @@
-package aoc2025
+package main.groovy.aoc2025.day4
 
 def testData = '''\
 ..@@.@@@@.
