@@ -1,5 +1,55 @@
 package aoc2025
 
+def testData = '''\
+..@@.@@@@.
+@@@.@.@.@@
+@@@@@.@.@@
+@.@@@@..@.
+@@.@@@@.@@
+.@@@@@@@.@
+.@.@.@.@@@
+@.@@@.@@@@
+.@@@@@@@@.
+@.@.@@@.@.'''
+
+def input = args ? new File(args[0]).text : testData
+
+def floorMap = input.readLines()*.toCharArray()
+int height = floorMap.size()
+int width = floorMap[0].size()
+
+def countNeighbourRolls = { int y, int x ->
+    (-1..1).sum { dy ->
+        (-1..1).count { dx ->
+            def ny = y + dy, nx = x + dx
+            (dy || dx) && ny in 0..<height && nx in 0..<width && floorMap[ny][nx] == '@'
+        }
+    }
+}
+
+def isRemovable = { int y, int x -> floorMap[y][x] == '@' && countNeighbourRolls(y, x) < 4 }
+
+println "Part 1 movable rolls: ${(0..<height).sum { y -> (0..<width).count { x -> isRemovable(y, x) } }}"
+
+long total = 0
+while (true) {
+    int removed = 0
+    for (y in 0..<height) {
+        for (x in 0..<width) {
+            if (isRemovable(y, x)) {
+                floorMap[y][x] = '.' as char
+                ++removed
+            }
+        }
+    }
+    if (!removed) break
+    total += removed
+}
+
+println "Part 2 movable rolls: $total"
+
+/*
+// "Problemløsningsversjon" - få mer eksplisitt tradisjonell Java-style kode til å funke før refaktorering til idiomatisk Groovy med Collections & closures
 import groovy.transform.Field
 
 @Field def floorMap = []
@@ -74,3 +124,4 @@ do {
 } while (moved > 0)
 
 println "Part 2 movable rolls: $total"
+*/

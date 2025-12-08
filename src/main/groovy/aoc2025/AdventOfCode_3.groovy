@@ -16,7 +16,7 @@ new File(args[0]).readLines().with { lines ->
 }
 
 /*
-// "Problemløsningsversjon" - få mer eksplisitt kode til å funke før refaktorering til idiomatisk Groovy med Collections & closures
+// "Problemløsningsversjon" - få mer eksplisitt tradisjonell Java-style kode til å funke før refaktorering til idiomatisk Groovy med Collections & closures
 class BatteryBank {
     String bank
     long max
