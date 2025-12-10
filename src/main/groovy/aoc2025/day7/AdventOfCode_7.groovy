@@ -4,8 +4,8 @@ class BeamSegment {
     static List<Map<Integer, BeamSegment>> inventory
     static int splits = 0
     int x, y
-    BeamSegment leftSplit = null, rightSplit = null
-    BigInteger cachedCount = null
+    BeamSegment leftSplit, rightSplit
+    BigInteger cachedCount
 
     static void initialize(int numRows) {
         inventory = (0..<numRows).collect { [:] }
@@ -21,33 +21,23 @@ class BeamSegment {
     void propagate(List<String> grid) {
         for (i in y..<grid.size()) {
             if (grid[i][x] != '^' as char) continue
-            def results = [[-1, { it -> leftSplit = it }], [1, { it -> rightSplit = it }]].collect { delta, assign ->
+
+            def isNew = [[-1, { leftSplit = it }], [1, { rightSplit = it }]].collect { delta, assign ->
                 def newX = x + delta
                 if (newX < 0 || newX >= grid[0].size()) return false
                 def existed = inventory[i][newX] as boolean
                 assign(inventory[i][newX] ?: new BeamSegment(grid, newX, i))
                 !existed
             }
-            if (results.any()) ++splits
+            if (isNew.any()) ++splits
             break
         }
     }
 
-    BigInteger traverse(){
+    BigInteger traverse() {
         if (cachedCount != null) return cachedCount
-        if (leftSplit == null && rightSplit == null) {
-            cachedCount = 1G
-        }
-        else {
-            cachedCount = 0G
-            if (leftSplit != null) {
-                cachedCount += leftSplit.traverse()
-            }
-            if (rightSplit != null) {
-                cachedCount += rightSplit.traverse()
-            }
-        }
-        return cachedCount
+        cachedCount = (leftSplit == null && rightSplit == null) ? 1G :
+                (leftSplit?.traverse() ?: 0G) + (rightSplit?.traverse() ?: 0G)
     }
 }
 
@@ -78,11 +68,9 @@ BeamSegment.initialize(lines.size())
 def beamStart = new BeamSegment(lines, lines[0].indexOf('S'), 0)
 
 if (!args) assert BeamSegment.splits == testResult1
-
 println "Beam splits: ${BeamSegment.splits}"
 
-BigInteger timeLines = beamStart.traverse()
+def timeLines = beamStart.traverse()
 
 if (!args) assert timeLines == testResult2
-
-println "Timelines: " + timeLines
+println "Timelines: $timeLines"
