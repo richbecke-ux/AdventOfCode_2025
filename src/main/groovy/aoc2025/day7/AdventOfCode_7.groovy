@@ -4,7 +4,8 @@ class BeamSegment {
     static List<Map<Integer, BeamSegment>> inventory
     static int splits = 0
     int x, y
-    BeamSegment leftSplit, rightSplit
+    BeamSegment leftSplit = null, rightSplit = null
+    BigInteger cachedCount = null
 
     static void initialize(int numRows) {
         inventory = (0..<numRows).collect { [:] }
@@ -31,6 +32,23 @@ class BeamSegment {
             break
         }
     }
+
+    BigInteger traverse(){
+        if (cachedCount != null) return cachedCount
+        if (leftSplit == null && rightSplit == null) {
+            cachedCount = 1G
+        }
+        else {
+            cachedCount = 0G
+            if (leftSplit != null) {
+                cachedCount += leftSplit.traverse()
+            }
+            if (rightSplit != null) {
+                cachedCount += rightSplit.traverse()
+            }
+            return cachedCount
+        }
+    }
 }
 
 def testData = '''\
@@ -52,12 +70,19 @@ def testData = '''\
 ...............'''
 
 def testResult1 = 21
+def testResult2 = 40
 
 def lines = (args ? new File(args[0]).text : testData).readLines()
 BeamSegment.initialize(lines.size())
 
-new BeamSegment(lines, lines[0].indexOf('S'), 0)
+def beamStart = new BeamSegment(lines, lines[0].indexOf('S'), 0)
 
 if (!args) assert BeamSegment.splits == testResult1
 
 println "Beam splits: ${BeamSegment.splits}"
+
+BigInteger timeLines = beamStart.traverse()
+
+if (!args) assert timeLines == testResult2
+
+println "Timelines: " + timeLines
