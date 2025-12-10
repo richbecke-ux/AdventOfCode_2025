@@ -46,8 +46,8 @@ class BeamSegment {
             if (rightSplit != null) {
                 cachedCount += rightSplit.traverse()
             }
-            return cachedCount
         }
+        return cachedCount
     }
 }
 
