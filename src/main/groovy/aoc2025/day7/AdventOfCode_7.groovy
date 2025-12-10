@@ -20,24 +20,14 @@ class BeamSegment {
     void propagate(List<String> grid) {
         for (i in y..<grid.size()) {
             if (grid[i][x] != '^' as char) continue
-
-            def isNewSplit = false
-
-            if (x > 0 && !inventory[i][x - 1]) {
-                leftSplit = new BeamSegment(grid, x - 1, i)
-                isNewSplit = true
-            } else if (x > 0) {
-                leftSplit = inventory[i][x - 1]
+            def results = [[-1, { it -> leftSplit = it }], [1, { it -> rightSplit = it }]].collect { delta, assign ->
+                def newX = x + delta
+                if (newX < 0 || newX >= grid[0].size()) return false
+                def existed = inventory[i][newX] as boolean
+                assign(inventory[i][newX] ?: new BeamSegment(grid, newX, i))
+                !existed
             }
-
-            if (x < grid[0].size() - 1 && !inventory[i][x + 1]) {
-                rightSplit = new BeamSegment(grid, x + 1, i)
-                isNewSplit = true
-            } else if (x < grid[0].size() - 1) {
-                rightSplit = inventory[i][x + 1]
-            }
-
-            if (isNewSplit) splits++
+            if (results.any()) ++splits
             break
         }
     }
@@ -66,8 +56,7 @@ def testResult1 = 21
 def lines = (args ? new File(args[0]).text : testData).readLines()
 BeamSegment.initialize(lines.size())
 
-def startX = lines[0].indexOf('S')
-new BeamSegment(lines, startX, 0)
+new BeamSegment(lines, lines[0].indexOf('S'), 0)
 
 if (!args) assert BeamSegment.splits == testResult1
 
