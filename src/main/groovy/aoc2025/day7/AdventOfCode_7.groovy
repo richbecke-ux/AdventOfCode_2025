@@ -20,18 +20,6 @@ class BeamSegment {
 
     void propagate (ArrayList grid) {
         for (i in y..<grid.size()) {
-            /*
-            if (grid[i][x] == '^' as char) {
-                if (x > 0) {
-                    leftSplit = inventory[i][x - 1] ?: new BeamSegment(grid, x - 1, i)
-                }
-                if (x < (grid[y].length() - 1)) {
-                    rightSplit = inventory[i][x + 1] ?: new BeamSegment(grid, x + 1, i)
-                }
-                ++splits
-                break
-            }
-            */
             if (grid[i][x] == '^' as char) {
                 def isNewSplit = false
                 if (x > 0) {
