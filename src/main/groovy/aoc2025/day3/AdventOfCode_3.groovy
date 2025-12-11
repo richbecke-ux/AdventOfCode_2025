@@ -1,4 +1,4 @@
-package main.groovy.aoc2025.day3
+package aoc2025.day3
 
 long calcBankMax(String spec, int activeCells) {
     def digitPos = (0..<activeCells).inject([]) { pos, i ->

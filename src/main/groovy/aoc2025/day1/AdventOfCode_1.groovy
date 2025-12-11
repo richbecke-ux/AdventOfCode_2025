@@ -1,4 +1,4 @@
-package main.groovy.aoc2025.day1
+package aoc2025.day1
 
 class LockDial {
     int size,

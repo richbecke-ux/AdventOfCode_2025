@@ -1,4 +1,4 @@
-package main.groovy.aoc2025.day2
+package aoc2025.day2
 
 class Range {
     long rangeStart, rangeEnd, sum_1 = 0, sum_2 = 0
