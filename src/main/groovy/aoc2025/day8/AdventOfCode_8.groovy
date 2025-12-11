@@ -37,8 +37,10 @@ def idx = (args ? new File(args[0]).text : testData).readLines().collectEntries 
     [c, [c]]
 }
 
+def clCnt = idx.size()
+
 def addPair = { a, b ->
-    idx[a] != idx[b] && idx[a].addAll(idx[b]) && idx[b].each { idx[it] = idx[a] }
+    idx[a] != idx[b] && idx[a].addAll(idx[b]).with { --clCnt; idx[b].each { idx[it] = idx[a] } }
 }
 
 def dsts = (idx.keySet() as List).indexed().collectMany { i, a ->
@@ -55,4 +57,12 @@ dsts.take(numDst).each {
 
 println "Part 1 answer: " + idx.values().unique(false).sort { -it.size() }.take(3)*.size().product()
 
+def lastMerge
+dsts.each {
+    if (clCnt == 1) return
+    if (addPair(it[1], it[2])) {
+        lastMerge = [it[1], it[2]]
+    }
+}
 
+println "Part 2 answer: " + ((lastMerge[0][0] as long) * lastMerge[1][0])
