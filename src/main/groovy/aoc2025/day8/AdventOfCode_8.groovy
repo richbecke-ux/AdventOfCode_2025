@@ -1,4 +1,4 @@
-package main.groovy.aoc2025.day8
+package aoc2025.day8
 
 List.metaClass.product = { -> delegate.inject(1L) { acc, val -> acc * val } }
 
