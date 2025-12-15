@@ -24,7 +24,7 @@ def testData = '''\
 984,92,344
 425,690,689'''
 
-def testParam1=10
+def testParam1= 10
 def testResult1 = 40
 def testResult2 = 0
 
