@@ -1,54 +1,235 @@
-package aoc2025.day9
+package aoc2025.day9.scifimap
 
+import org.locationtech.jts.geom.Coordinate
+import org.locationtech.jts.geom.GeometryFactory
+import org.locationtech.jts.geom.LinearRing
+import org.locationtech.jts.geom.Polygon
+import org.locationtech.jts.geom.impl.CoordinateArraySequence
+
+import java.awt.BasicStroke
+import java.awt.Color
+import java.awt.Font
+import java.awt.GradientPaint
+import java.awt.RadialGradientPaint
+import java.awt.Rectangle
+import java.awt.RenderingHints
 import java.awt.geom.Line2D
 import java.awt.geom.Path2D
 import java.awt.geom.Point2D
-import javax.imageio.ImageIO
 import java.awt.image.BufferedImage
-import java.awt.*
-import java.util.List
+import javax.imageio.ImageIO
 
 // ============================================================
-// 1. ART CONFIGURATION
+// 1. CONFIGURATION & PALETTES
 // ============================================================
-def TARGET_VERTICES = 2500
+def TARGET_VERTICES = 3000
 def CANVAS_SIZE = 100000
 def IMAGE_SIZE = 4096
-def PADDING = 15000
-def SEED = System.currentTimeMillis()
+def MIN_BOUND = 25000
+def MAX_BOUND = 75000
+def THICKNESS = 15000
+def RANDOM_SEED = System.currentTimeMillis()
 
-// Palettes: [Background, MainFill, Glow, Accent]
+// Palettes: [Background, FillStart, FillEnd, Glow, Accent]
+// UPDATED: Increased contrast between fill1 and fill2 for a more visible gradient.
 def PALETTES = [
-        "Cyberpunk": [new Color(10, 10, 16), new Color(0, 255, 255, 40), new Color(255, 0, 128), new Color(0, 255, 255)],
-        "Blueprint": [new Color(20, 35, 60), new Color(30, 60, 100, 100), new Color(200, 220, 255), new Color(255, 255, 255)],
-        "Matrix":    [new Color(0, 10, 0),    new Color(0, 50, 0, 80),    new Color(0, 255, 50),   new Color(200, 255, 200)],
-        "Mars":      [new Color(30, 10, 10),  new Color(100, 40, 20, 60), new Color(255, 80, 40),  new Color(255, 200, 100)],
-        "Void":      [new Color(5, 5, 5),     new Color(20, 20, 20, 255), new Color(255, 255, 255), new Color(100, 100, 100)]
+        0: [name: "Magma",    bg: new Color(10, 5, 5),    fill1: new Color(50, 10, 10), fill2: new Color(100, 30, 10), glow: new Color(255, 100, 0), accent: new Color(255, 200, 0)],
+        1: [name: "Ocean",    bg: new Color(2, 5, 15),    fill1: new Color(5, 20, 40),  fill2: new Color(10, 50, 90),  glow: new Color(0, 200, 255),   accent: new Color(100, 255, 255)],
+        2: [name: "Matrix",   bg: new Color(0, 10, 0),    fill1: new Color(0, 30, 0),   fill2: new Color(0, 60, 0),   glow: new Color(50, 255, 50),   accent: new Color(150, 255, 150)],
+        3: [name: "Cyber",    bg: new Color(10, 5, 15),   fill1: new Color(30, 0, 40),  fill2: new Color(60, 0, 80),  glow: new Color(255, 0, 255),   accent: new Color(0, 255, 255)],
+        4: [name: "Gold",     bg: new Color(15, 15, 15),  fill1: new Color(50, 40, 10), fill2: new Color(100, 90, 30), glow: new Color(255, 215, 0),   accent: new Color(255, 255, 200)],
+        5: [name: "Ice",      bg: new Color(20, 25, 30),  fill1: new Color(40, 50, 70), fill2: new Color(70, 90, 120), glow: new Color(150, 220, 255), accent: new Color(255, 255, 255)],
+        6: [name: "Void",     bg: new Color(5, 5, 5),     fill1: new Color(20, 20, 20), fill2: new Color(50, 50, 50), glow: new Color(255, 255, 255), accent: new Color(150, 150, 150)]
 ]
 
 // ============================================================
-// 2. GEOMETRY ENGINE
+// 2. ARGUMENT PARSING
 // ============================================================
-def rnd = new Random(SEED)
+def rnd = new Random(RANDOM_SEED)
+
+def printUsage = {
+    println "Usage: groovy script.groovy [options]"
+    println "Options:"
+    println "  -q, -l, -c, -h, -t, -x, -s  : Select base shape (Default: Random)"
+    println "  -p <n>                      : Select palette by number (Default: Random)"
+    println "  -?                          : Show this help"
+    println "\nAvailable Palettes:"
+    PALETTES.each { id, p -> println "  ${id}: ${p.name}" }
+    System.exit(0)
+}
+
+if (args.contains("-?") || args.contains("-help")) printUsage()
 
 def shapes = ['q', 'l', 'c', 'h', 't', 'x', 's']
-def shapeType = shapes[rnd.nextInt(shapes.size())]
-if (args.any { it.startsWith('-') }) shapeType = args.find{it.startsWith('-')}.substring(1)
+def shapeType = null
+if (args.any { it == '-t' }) shapeType = 't'
+if (args.any { it == '-x' }) shapeType = 'x'
+if (args.any { it == '-s' }) shapeType = 's'
+if (args.any { it == '-l' }) shapeType = 'l'
+if (args.any { it == '-h' }) shapeType = 'h'
+if (args.any { it == '-c' }) shapeType = 'c'
+if (args.any { it == '-q' }) shapeType = 'q'
+if (!shapeType) shapeType = shapes[rnd.nextInt(shapes.size())]
 
-def paletteName = PALETTES.keySet().toList()[rnd.nextInt(PALETTES.size())]
-def colors = PALETTES[paletteName]
-def BG_COL=colors[0]; def FILL_COL=colors[1]; def GLOW_COL=colors[2]; def ACCENT_COL=colors[3]
+def paletteId = -1
+def pIndex = args.findIndexOf { it == '-p' }
+if (pIndex > -1 && pIndex + 1 < args.size() && args[pIndex+1].isNumber()) {
+    paletteId = args[pIndex+1].toInteger()
+}
 
-System.err.println "Generating Art..."
-System.err.println "Shape: ${shapeType.toUpperCase()} | Theme: ${paletteName} | Seed: ${SEED}"
+if (!PALETTES.containsKey(paletteId)) {
+    if (pIndex > -1) {
+        println "Error: Invalid palette ID '${args[pIndex+1]}'"
+        printUsage()
+    }
+    paletteId = rnd.nextInt(PALETTES.size())
+}
 
-// --- Shape Definitions ---
+def currentPalette = PALETTES[paletteId]
+def argCount = args.find { it.isNumber() && it != paletteId.toString() && (pIndex == -1 || it != args[pIndex+1]) }
+if (argCount) TARGET_VERTICES = argCount.toInteger()
+
+println "------------------------------------------------"
+println "Generating: ${shapeType.toUpperCase()}-Shape"
+println "Palette   : [${paletteId}] ${currentPalette.name}"
+println "Seed      : ${RANDOM_SEED}"
+println "Targets   : ${TARGET_VERTICES} vertices"
+println "------------------------------------------------"
+
+// ============================================================
+// 3. PHASE CONFIGURATION
+// ============================================================
+def phases = [
+        [name: "Macro", count: 8, minLen: 8000, maxLen: 22000, minDepth: 4000, maxDepth: 10000, steps: 6, minGap: 4000, types: ["pyramid", "pyramid", "round", "round", "box"]],
+        [name: "Meso-Major", count: 30, minLen: 3000, maxLen: 9000, minDepth: 2000, maxDepth: 5000, steps: 4, minGap: 2000, types: ["pyramid", "pyramid", "round", "round", "box"]],
+        [name: "Meso-Minor", count: 100, minLen: 1200, maxLen: 3500, minDepth: 600, maxDepth: 2500, steps: 2, minGap: 800, types: ["box", "box", "pyramid", "round"]],
+        [name: "Micro", count: -1, minLen: 300, maxLen: 1200, minDepth: 150, maxDepth: 1000, steps: 0, minGap: 250, types: ["box", "pyramid"]]
+]
+
+// ============================================================
+// 4. GEOMETRY HELPERS (JTS & Spatial Index)
+// ============================================================
+
+// Initialize JTS Geometry Factory
+def gf = new GeometryFactory()
+
+// Helper to convert our list of lists [[x,y],...] to a JTS Polygon
+def toJTSPolygon(List<List<Long>> verts, GeometryFactory factory) {
+    if (verts.isEmpty()) return null
+    Coordinate[] coords = new Coordinate[verts.size() + 1]
+    for (int i = 0; i < verts.size(); i++) {
+        coords[i] = new Coordinate(verts[i][0] as double, verts[i][1] as double)
+    }
+    // Close the ring
+    coords[verts.size()] = coords[0]
+    LinearRing shell = factory.createLinearRing(new CoordinateArraySequence(coords))
+    return factory.createPolygon(shell, null)
+}
+
+
+class SpatialIndex {
+    int cellSize = 5000; Map<String, List<Integer>> grid = [:]
+    def rebuild(List vertices) {
+        grid.clear(); int n = vertices.size()
+        for (int i = 0; i < n; i++) {
+            def v1 = vertices[i]; def v2 = vertices[(i + 1) % n]
+            int minX = (Math.min(v1[0], v2[0])/cellSize).toInteger(); int maxX = (Math.max(v1[0], v2[0])/cellSize).toInteger()
+            int minY = (Math.min(v1[1], v2[1])/cellSize).toInteger(); int maxY = (Math.max(v1[1], v2[1])/cellSize).toInteger()
+            for (int x = minX; x <= maxX; x++) { for (int y = minY; y <= maxY; y++) {
+                def key = "${x}_${y}"; if (!grid.containsKey(key)) grid[key] = []; grid[key] << i
+            }}
+        }
+    }
+    Set<Integer> getCandidates(long x1, long y1, long x2, long y2, long padding) {
+        Set<Integer> c = new HashSet<>()
+        int minX = ((Math.min(x1, x2)-padding)/cellSize).toInteger(); int maxX = ((Math.max(x1, x2)+padding)/cellSize).toInteger()
+        int minY = ((Math.min(y1, y2)-padding)/cellSize).toInteger(); int maxY = ((Math.max(y1, y2)+padding)/cellSize).toInteger()
+        for (int x = minX; x <= maxX; x++) { for (int y = minY; y <= maxY; y++) {
+            def key = "${x}_${y}"; if (grid.containsKey(key)) c.addAll(grid[key])
+        }}
+        return c
+    }
+}
+
+def linesIntersect = { p1, p2, p3, p4 -> Line2D.linesIntersect(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], p4[0], p4[1]) }
+
+def makeSteps = { pts ->
+    def res = [];
+    for (int i=0; i<pts.size()-1; i++) {
+        def p1 = pts[i]; def p2 = pts[i+1]; res << p1
+        if (p1[0] != p2[0] && p1[1] != p2[1]) res << [p1[0], p2[1]]
+    }
+    res << pts[-1]; return res
+}
+
+def generateLinearStairs = { start, end, steps ->
+    if (steps <= 0) return makeSteps([start, end])
+    def targets = []; long dx = end[0] - start[0]; long dy = end[1] - start[1]
+    for (int i = 0; i <= steps+1; i++) {
+        double t = i / (double)(steps+1); targets << [start[0] + dx*t, start[1] + dy*t]
+    }
+    return makeSteps(targets)
+}
+
+def generateRoundStairs = { start, end, steps, isHoriz ->
+    if (steps <= 0) return makeSteps([start, end])
+    def targets = []; long dx_total = end[0] - start[0]; long dy_total = end[1] - start[1]
+    for (int i = 0; i <= steps+1; i++) {
+        double t = i / (double)(steps+1); double angle = t * (Math.PI / 2.0)
+        double dx = Math.sin(angle); double dy = 1.0 - Math.cos(angle)
+        long tx, ty
+        if (isHoriz) { tx = start[0] + (long)(dx_total * dx); ty = start[1] + (long)(dy_total * dy) }
+        else { tx = start[0] + (long)(dx_total * dy); ty = start[1] + (long)(dy_total * dx) }
+        targets << [tx, ty]
+    }
+    return makeSteps(targets)
+}
+
+def selectWeightedEdge = { verts ->
+    def n = verts.size(); double[] w = new double[n]; double sum = 0
+    for (int i = 0; i < n; i++) {
+        def p1 = verts[i]; def p2 = verts[(i + 1) % n]
+        double len = (p1[0] - p2[0]).abs() + (p1[1] - p2[1]).abs(); w[i] = len; sum += len
+    }
+    double r = rnd.nextDouble() * sum; double acc = 0
+    for (int i = 0; i < n; i++) { acc += w[i]; if (r <= acc) return [i, w[i]] }
+    return [n-1, w[n-1]]
+}
+
+// Fast pre-check using bounding boxes
+def checkBoundingBox = { newPoints, allVertices, changedEdgeIdx, minGap, candidates ->
+    int n = allVertices.size()
+    // Check new points against candidate edges
+    for (int k = 1; k < newPoints.size() - 1; k++) {
+        def np = newPoints[k]
+        for (int i : candidates) {
+            if (i == changedEdgeIdx) continue
+            def v1 = allVertices[i]; def v2 = allVertices[(i + 1) % n]
+            if (Line2D.ptSegDist(v1[0], v1[1], v2[0], v2[1], np[0], np[1]) < minGap) return false
+        }
+    }
+    // Check candidate points against new edges
+    def newEdges = []; for (int i = 0; i < newPoints.size() - 1; i++) newEdges << [newPoints[i], newPoints[i+1]]
+    for (int i : candidates) {
+        if (i == changedEdgeIdx || i == (changedEdgeIdx + 1) % n) continue
+        def oldP = allVertices[i]
+        for (def newEdge : newEdges) {
+            if (Line2D.ptSegDist(newEdge[0][0], newEdge[0][1], newEdge[1][0], newEdge[1][1], oldP[0], oldP[1]) < minGap) return false
+        }
+    }
+    return true
+}
+
+// ============================================================
+// 5. BASE SHAPES
+// ============================================================
 def vertices = []
-def MIN=30000; def MAX=70000; def THICK=12000
-def X0=MIN; def X1=MIN+THICK; def X2=MAX-THICK; def X3=MAX
-def Y0=MIN; def Y1=MIN+THICK; def Y2=MAX-THICK; def Y3=MAX
-def XC1=50000-(THICK/2).toInteger(); def XC2=50000+(THICK/2).toInteger()
-def YC1=50000-(THICK/2).toInteger(); def YC2=50000+(THICK/2).toInteger()
+def X0 = MIN_BOUND; def X1 = MIN_BOUND + THICKNESS
+def X2 = MAX_BOUND - THICKNESS; def X3 = MAX_BOUND
+def Y0 = MIN_BOUND; def Y1 = MIN_BOUND + THICKNESS
+def Y2 = MAX_BOUND - THICKNESS; def Y3 = MAX_BOUND
+def XC1 = 50000 - (THICKNESS / 2).toInteger(); def XC2 = 50000 + (THICKNESS / 2).toInteger()
+def YC1 = 50000 - (THICKNESS / 2).toInteger(); def YC2 = 50000 + (THICKNESS / 2).toInteger()
 
 switch (shapeType) {
     case 'q': vertices = [[X0, Y0], [X3, Y0], [X3, Y3], [X0, Y3]]; break
@@ -60,202 +241,195 @@ switch (shapeType) {
     case 's': vertices = [[X1, Y0], [X3, Y0], [X3, YC2], [XC2, YC2], [XC2, Y3], [X0, Y3], [X0, YC1], [X1, YC1]]; break
 }
 
-// --- Helpers ---
-class SpatialIndex {
-    int sz = 5000; Map<String, List> grid = [:]
-    def rebuild(verts) { grid.clear(); int n=verts.size(); for(int i=0;i<n;i++) {
-        def v1=verts[i]; def v2=verts[(i+1)%n];
-        int xA=(Math.min(v1[0],v2[0])/sz) as int; int xB=(Math.max(v1[0],v2[0])/sz) as int
-        int yA=(Math.min(v1[1],v2[1])/sz) as int; int yB=(Math.max(v1[1],v2[1])/sz) as int
-        for(x in xA..xB) for(y in yA..yB) { String k="$x,$y"; if(!grid[k]) grid[k]=[]; grid[k]<<i }
-    }}
-    def get(x1,y1,x2,y2,pad) { Set c=new HashSet(); int xA=((Math.min(x1,x2)-pad)/sz) as int; int xB=((Math.max(x1,x2)+pad)/sz) as int
-        int yA=((Math.min(y1,y2)-pad)/sz) as int; int yB=((Math.max(y1,y2)+pad)/sz) as int
-        for(x in xA..xB) for(y in yA..yB) { String k="$x,$y"; if(grid[k]) c.addAll(grid[k]) }; return c
-    }
-}
-def si = new SpatialIndex(); si.rebuild(vertices)
+// ============================================================
+// 6. GENERATION LOOP (Robust)
+// ============================================================
+def spatialIndex = new SpatialIndex()
+spatialIndex.rebuild(vertices)
 
-def linesIntersect = { p1, p2, p3, p4 -> Line2D.linesIntersect(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1], p4[0], p4[1]) }
+phases.each { phase ->
+    System.err.println "Starting Phase: ${phase.name} (Vertices: ${vertices.size()})"
+    int modificationsMade = 0; int totalFails = 0
+    // Increased fail limits due to stricter JTS checks
+    int maxTotalFails = (phase.name == "Micro") ? 5000 : 1500
 
-def check = { pts, verts, idx, gap, cands ->
-    def edges=[]; for(int i=0; i<pts.size()-1; i++) edges<<[pts[i], pts[i+1]]
-    int n=verts.size()
-    for(int i : cands) { if(i==idx) continue; def v1=verts[i]; def v2=verts[(i+1)%n]
-        for(e in edges) if(linesIntersect(e[0],e[1],v1,v2)) {
-            if(!(e[0]==v1||e[0]==v2||e[1]==v1||e[1]==v2)) return false
-        }
-    }
-    for(int k=1; k<pts.size()-1; k++) for(int i : cands) {
-        if(i==idx) continue; def v1=verts[i]; def v2=verts[(i+1)%n]
-        if(Line2D.ptSegDist(v1[0],v1[1],v2[0],v2[1],pts[k][0],pts[k][1]) < gap) return false
-    }
-    for(int i : cands) {
-        if(i==idx||i==(idx+1)%n) continue; def v=verts[i]
-        for(e in edges) if(Line2D.ptSegDist(e[0][0],e[0][1],e[1][0],e[1][1],v[0],v[1]) < gap) return false
-    }
-    return true
-}
+    while (totalFails < maxTotalFails) {
+        if (phase.count != -1 && modificationsMade >= phase.count) break
+        if (vertices.size() >= TARGET_VERTICES) break
+        if (vertices.size() % 50 == 0) System.err.print("\rVertices: ${vertices.size()}/${TARGET_VERTICES} ")
 
-def generateComplexStairs = { a, b, s, h, isRound ->
-    def res = []
-    long dx = b[0] - a[0]
-    long dy = b[1] - a[1]
+        def selection = selectWeightedEdge(vertices)
+        int idx = selection[0]; double edgeLen = selection[1]
 
-    for (int k = 0; k <= s + 1; k++) {
-        double t = k / (double)(s + 1)
-        double xx, yy
-        if (isRound) {
-            double ang = t * (Math.PI / 2.0)
-            if (h) { xx = a[0] + dx * Math.sin(ang); yy = a[1] + dy * (1.0 - Math.cos(ang)) }
-            else { xx = a[0] + dx * (1.0 - Math.cos(ang)); yy = a[1] + dy * Math.sin(ang) }
-        } else {
-            xx = a[0] + dx * t; yy = a[1] + dy * t
-        }
-        if (res.size() > 0) {
-            long prevX = res[-1][0]; long prevY = res[-1][1]
-            if (prevX != (long)xx && prevY != (long)yy) res << [prevX, (long)yy]
-        }
-        res << [(long)xx, (long)yy]
-    }
-    return res
-}
+        if (edgeLen < phase.minLen * 1.5) { totalFails++; continue }
 
-// --- Generation Loop ---
-def phases = [
-        [n:"Macro", cnt:8, minL:8000, maxL:20000, minD:3000, maxD:8000, s:5, g:4000, t:["pyramid","round","box"]],
-        [n:"Meso", cnt:50, minL:2500, maxL:7000, minD:1500, maxD:4000, s:3, g:1500, t:["box","pyramid"]],
-        [n:"Micro", cnt:-1, minL:400, maxL:1500, minD:200, maxD:1000, s:0, g:400, t:["box","box","box","pyramid"]]
-]
+        boolean successOnEdge = false; int edgeRetries = 0
+        while (edgeRetries < 5 && !successOnEdge) {
+            edgeRetries++
+            long segmentLen = rnd.nextInt((int)(phase.maxLen - phase.minLen)) + phase.minLen
+            if (segmentLen >= edgeLen - 100) segmentLen = (long)(edgeLen * 0.8)
+            long offset = rnd.nextInt((int)(edgeLen - segmentLen))
+            long depth = rnd.nextInt((int)(phase.maxDepth - phase.minDepth)) + phase.minDepth
+            int direction = rnd.nextBoolean() ? 1 : -1
+            String type = phase.types[rnd.nextInt(phase.types.size())]
 
-phases.each { p ->
-    System.err.println "Starting Phase: ${p.n} (Current Vertices: ${vertices.size()})"
-    int fails=0; int mods=0;
-    // OPTIMALISERING: Redusert maks antall feil før den gir opp fasen
-    int maxF = (p.n=="Micro")?2000:500
+            def p1 = vertices[idx]; def p2 = vertices[(idx + 1) % vertices.size()]
+            boolean isHoriz = (p1[1] == p2[1])
+            def n1, n4, rect_n2, rect_n3
 
-    while(fails < maxF && (p.cnt==-1 || mods<p.cnt) && vertices.size()<TARGET_VERTICES) {
-
-        int n=vertices.size(); double sum=0; double[] w=new double[n];
-        for(int i=0;i<n;i++) { double len = (vertices[i][0]-vertices[(i+1)%n][0]).abs() + (vertices[i][1]-vertices[(i+1)%n][1]).abs(); w[i]=len; sum+=len }
-        double r=rnd.nextDouble()*sum; double acc=0; int idx=0
-        for(int i=0;i<n;i++) { acc+=w[i]; if(r<=acc) { idx=i; break } }
-
-        double elen=w[idx]; if(elen < p.minL*1.2) { fails++; continue }
-        long slen = rnd.nextInt((int)(p.maxL-p.minL))+p.minL; if(slen>=elen) slen=(long)(elen*0.7)
-        long off = rnd.nextInt((int)(elen-slen)); long d = rnd.nextInt((int)(p.maxD-p.minD))+p.minD
-        int dir = rnd.nextBoolean()?1:-1; String type = p.t[rnd.nextInt(p.t.size())]
-
-        def v1=vertices[idx]; def v2=vertices[(idx+1)%n]; boolean hor=(v1[1]==v2[1])
-
-        def n1, n4, r2, r3
-        if(hor) { long y=v1[1]; long xb=Math.min(v1[0],v2[0]); n1=[xb+off,y]; n4=[xb+off+slen,y]; r2=[n1[0],y+d*dir]; r3=[n4[0],y+d*dir] }
-        else { long x=v1[0]; long yb=Math.min(v1[1],v2[1]); n1=[x,yb+off]; n4=[x,yb+off+slen]; r2=[x+d*dir,n1[1]]; r3=[x+d*dir,n4[1]] }
-
-        long mx1=Math.min(n1[0],r2[0])-p.g; long mx2=Math.max(n1[0],r2[0])+p.g
-        long my1=Math.min(n1[1],r2[1])-p.g; long my2=Math.max(n1[1],r2[1])+p.g
-        def cands = si.get(mx1,my1,mx2,my2,p.g)
-
-        if(check([n1,r2,r3,n4], vertices, idx, p.g, cands)) {
-            def pts=[]
-            if(type=="box" || p.s==0) pts=[n1,r2,r3,n4]
-            else {
-                double shr=0.25; long sa=(long)(slen*shr)
-                def ts, te; if(hor) { ts=[r2[0]+sa,r2[1]]; te=[r3[0]-sa,r3[1]] } else { ts=[r2[0],r2[1]+sa]; te=[r3[0],r3[1]-sa] }
-                pts.addAll(generateComplexStairs(n1, ts, p.s, hor, type=="round"))
-                pts.addAll(generateComplexStairs(te, n4, p.s, hor, type=="round"))
+            if (isHoriz) {
+                long xB = Math.min(p1[0], p2[0]); long y = p1[1]
+                n1 = [xB + offset, y]; n4 = [xB + offset + segmentLen, y]
+                rect_n2 = [n1[0], y + (depth * direction)]; rect_n3 = [n4[0], y + (depth * direction)]
+            } else {
+                long yB = Math.min(p1[1], p2[1]); long x = p1[0]
+                n1 = [x, yB + offset]; n4 = [x, yB + offset + segmentLen]
+                rect_n2 = [x + (depth * direction), n1[1]]; rect_n3 = [x + (depth * direction), n4[1]]
             }
 
-            boolean rev = false; if(hor && v1[0]>v2[0]) rev=true; if(!hor && v1[1]>v2[1]) rev=true
-            if(rev) pts=pts.reverse()
-            vertices.addAll(idx+1, pts.unique())
-            si.rebuild(vertices); mods++; fails=0
+            def bbox = [n1, rect_n2, rect_n3, n4]
+            long minX = bbox.collect{it[0]}.min(), maxX = bbox.collect{it[0]}.max()
+            long minY = bbox.collect{it[1]}.min(), maxY = bbox.collect{it[1]}.max()
+            Set<Integer> candidates = spatialIndex.getCandidates(minX, minY, maxX, maxY, phase.minGap)
 
-            // PROGRESS BAR
-            if (vertices.size() % 50 == 0) {
-                int pct = ((vertices.size() / (double)TARGET_VERTICES) * 100).toInteger()
-                System.err.print("\rProgress: ${vertices.size()}/${TARGET_VERTICES} ($pct%) - Phase: ${p.n} ")
+            // 1. FAST PRE-CHECK (Bounding Box Proximity)
+            if (checkBoundingBox(bbox, vertices, idx, phase.minGap, candidates)) {
+                def pointsToAdd = []
+                if (type == "box") { pointsToAdd = [n1, rect_n2, rect_n3, n4] }
+                else {
+                    int steps = phase.steps
+                    if (steps > 0) {
+                        double shrink = 0.25; long sAmt = (long)(segmentLen * shrink)
+                        def top_s, top_e
+                        if (isHoriz) { top_s=[rect_n2[0]+sAmt, rect_n2[1]]; top_e=[rect_n3[0]-sAmt, rect_n3[1]] }
+                        else { top_s=[rect_n2[0], rect_n2[1]+sAmt]; top_e=[rect_n3[0], rect_n3[1]-sAmt] }
+                        def sUp = (type == "round") ? generateRoundStairs(n1, top_s, steps, isHoriz) : generateLinearStairs(n1, top_s, steps)
+                        def sDown = (type == "round") ? generateRoundStairs(top_e, n4, steps, isHoriz) : generateLinearStairs(top_e, n4, steps)
+                        pointsToAdd.addAll(sUp); pointsToAdd.addAll(sDown); pointsToAdd = pointsToAdd.unique()
+                    } else { pointsToAdd = [n1, rect_n2, rect_n3, n4] }
+                }
+
+                boolean rev = false
+                if (isHoriz && p1[0] > p2[0]) rev = true
+                if (!isHoriz && p1[1] > p2[1]) rev = true
+                if (rev) pointsToAdd = pointsToAdd.reverse()
+
+                // 2. ROBUST JTS VALIDATION
+                // Create a temporary vertex list with the change applied
+                def tempVertices = new ArrayList<>(vertices)
+                tempVertices.addAll(idx + 1, pointsToAdd)
+
+                // Convert to JTS Polygon and check validity
+                Polygon jtsPoly = toJTSPolygon(tempVertices, gf)
+                if (jtsPoly != null && jtsPoly.isValid()) {
+                    // Success! The new shape is mathematically sound.
+                    vertices = tempVertices
+                    spatialIndex.rebuild(vertices)
+                    modificationsMade++
+                    successOnEdge = true
+                    totalFails = 0
+                } else {
+                    // JTS found a self-intersection. Discard this attempt.
+                    // (No need to increment totalFails here, the outer loop handles it)
+                }
             }
-
-        } else fails++
+        }
+        if (!successOnEdge) totalFails++
     }
-    System.err.println "\nPhase ${p.n} complete."
+    System.err.println "\nPhase ${phase.name} complete."
 }
+
+// File Names
+def baseName = "robust_${shapeType}_${currentPalette.name.toLowerCase()}"
+def csvFile, imgFile
+int fileCounter = 0
+while (true) {
+    def suffix = (fileCounter == 0) ? "" : "_${fileCounter}"
+    def csvName = "${baseName}${suffix}.csv"
+    def imgName = "${baseName}${suffix}.png"
+    csvFile = new File(csvName); imgFile = new File(imgName)
+    if (!csvFile.exists() && !imgFile.exists()) break
+    fileCounter++
+}
+
+System.err.println "Finished! Vertices: ${vertices.size()}"
+System.err.println "Saving coordinates to ${csvFile.name}..."
+csvFile.withWriter { w -> vertices.each { w.writeLine("${it[0]},${it[1]}") } }
 
 // ============================================================
-// 3. RENDER ENGINE
+// 7. RENDER ENGINE (Unified Fill, Glow, Scanlines)
 // ============================================================
-System.err.println "Rendering image..."
-def img = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB)
-def g2d = img.createGraphics()
-g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+System.err.println "Generating Image to ${imgFile.name}..."
+try {
+    def img = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB)
+    def g2d = img.createGraphics()
+    g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
 
-def center = new Point2D.Float(IMAGE_SIZE/2, IMAGE_SIZE/2)
-float radius = IMAGE_SIZE * 0.8f
-float[] dist = [0.0f, 1.0f]
-Color[] colorsArr = [BG_COL.brighter(), BG_COL]
-RadialGradientPaint p = new RadialGradientPaint(center, radius, dist, colorsArr)
-g2d.setPaint(p)
-g2d.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE)
+    // 1. Background
+    def center = new Point2D.Float(IMAGE_SIZE/2, IMAGE_SIZE/2)
+    float radius = IMAGE_SIZE * 0.8f
+    float[] dist = [0.0f, 1.0f]
+    Color[] colorsArr = [currentPalette.bg.brighter(), currentPalette.bg]
+    RadialGradientPaint bgPaint = new RadialGradientPaint(center, radius, dist, colorsArr)
+    g2d.setPaint(bgPaint)
+    g2d.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE)
 
-g2d.setColor(new Color(ACCENT_COL.getRed(), ACCENT_COL.getGreen(), ACCENT_COL.getBlue(), 20))
-int gridSize = 100
-for(int i=0; i<IMAGE_SIZE; i+=gridSize) {
-    g2d.drawLine(0, i, IMAGE_SIZE, i)
-    g2d.drawLine(i, 0, i, IMAGE_SIZE)
-}
+    double sc = IMAGE_SIZE / CANVAS_SIZE
 
-double sc = (IMAGE_SIZE - 200) / (double)CANVAS_SIZE
-Path2D poly = new Path2D.Double()
-vertices.eachWithIndex { v, i ->
-    double x = v[0] * sc + 100
-    double y = v[1] * sc + 100
-    if(i==0) poly.moveTo(x, y) else poly.lineTo(x, y)
-}
-poly.closePath()
+    // 2. Create Path
+    Path2D poly = new Path2D.Double()
+    vertices.eachWithIndex { v, i ->
+        double x = v[0] * sc; double y = v[1] * sc
+        if(i==0) poly.moveTo(x, y) else poly.lineTo(x, y)
+    }
+    poly.closePath()
 
-g2d.setColor(FILL_COL)
-g2d.fill(poly)
+    // 3. UNIFIED FILL (Vertical Gradient)
+    Rectangle bounds = poly.getBounds()
+    // UPDATED: Changed to vertical gradient for better visibility
+    GradientPaint fillGrad = new GradientPaint(
+            (float)bounds.getCenterX(), (float)bounds.getMinY(), currentPalette.fill1,
+            (float)bounds.getCenterX(), (float)bounds.getMaxY(), currentPalette.fill2
+    )
+    g2d.setPaint(fillGrad)
+    g2d.fill(poly)
 
-g2d.setClip(poly)
-g2d.setColor(new Color(GLOW_COL.getRed(), GLOW_COL.getGreen(), GLOW_COL.getBlue(), 40))
-for(int i=0; i<IMAGE_SIZE; i+=20) {
-    g2d.drawLine(0, i, IMAGE_SIZE, i)
-}
-g2d.setClip(null)
+    // 4. SCANLINES
+    g2d.setClip(poly)
+    g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 40))
+    int scanSpacing = (IMAGE_SIZE / 200).toInteger()
+    for(int i=0; i<IMAGE_SIZE; i+=scanSpacing) {
+        g2d.drawLine(0, i, IMAGE_SIZE, i)
+    }
+    g2d.setClip(null)
 
-g2d.setStroke(new BasicStroke(4.0f))
-g2d.setColor(new Color(GLOW_COL.getRed(), GLOW_COL.getGreen(), GLOW_COL.getBlue(), 60))
-g2d.draw(poly)
-g2d.setStroke(new BasicStroke(1.5f))
-g2d.setColor(GLOW_COL)
-g2d.draw(poly)
+    // 5. GLOW OUTLINE
+    float strokeWidth = (float)(1000 * sc)
+    // UPDATED: Added explicit (float) casts to satisfy BasicStroke requirements
+    g2d.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+    g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 60))
+    g2d.draw(poly)
 
-g2d.setColor(ACCENT_COL)
-g2d.setFont(new Font("Monospaced", Font.BOLD, 40))
-g2d.drawString("FIG 9-A: ${shapeType.toUpperCase()}-CLASS ANOMALY", 100, 80)
-g2d.setFont(new Font("Monospaced", Font.PLAIN, 20))
-g2d.drawString("VERTICES: ${vertices.size()}", 100, 120)
-g2d.drawString("SEED: ${SEED}", 100, 150)
-g2d.drawString("SYS.PALETTE: ${paletteName.toUpperCase()}", 100, 180)
+    g2d.setStroke(new BasicStroke((float)(strokeWidth * 0.15f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+    g2d.setColor(currentPalette.glow)
+    g2d.draw(poly)
 
-int cLen = 200
-g2d.setStroke(new BasicStroke(8.0f))
-g2d.drawLine(50, 50, 50+cLen, 50)
-g2d.drawLine(50, 50, 50, 50+cLen)
+    // 6. UI DECORATIONS
+    g2d.setColor(currentPalette.accent)
+    g2d.setFont(new Font("Monospaced", Font.BOLD, 40))
+    g2d.drawString("ENTITY: ${shapeType.toUpperCase()}-CLASS FRACTAL", 100, 80)
+    g2d.setFont(new Font("Monospaced", Font.PLAIN, 24))
+    g2d.drawString("VERTICES: ${vertices.size()} // PALETTE: ${currentPalette.name.toUpperCase()} // JTS VALIDATED", 100, 120)
 
-g2d.drawLine(IMAGE_SIZE-50, 50, IMAGE_SIZE-50-cLen, 50)
-g2d.drawLine(IMAGE_SIZE-50, 50, IMAGE_SIZE-50, 50+cLen)
+    int cLen = 150; int pad = 50
+    g2d.setStroke(new BasicStroke(6.0f))
+    g2d.drawLine(pad, pad, pad+cLen, pad); g2d.drawLine(pad, pad, pad, pad+cLen)
+    g2d.drawLine(IMAGE_SIZE-pad, pad, IMAGE_SIZE-pad-cLen, pad); g2d.drawLine(IMAGE_SIZE-pad, pad, IMAGE_SIZE-pad, pad+cLen)
+    g2d.drawLine(pad, IMAGE_SIZE-pad, pad+cLen, IMAGE_SIZE-pad); g2d.drawLine(pad, IMAGE_SIZE-pad, pad, IMAGE_SIZE-pad-cLen)
+    g2d.drawLine(IMAGE_SIZE-pad, IMAGE_SIZE-pad, IMAGE_SIZE-pad-cLen, IMAGE_SIZE-pad); g2d.drawLine(IMAGE_SIZE-pad, IMAGE_SIZE-pad, IMAGE_SIZE-pad, IMAGE_SIZE-pad-cLen)
 
-g2d.drawLine(50, IMAGE_SIZE-50, 50+cLen, IMAGE_SIZE-50)
-g2d.drawLine(50, IMAGE_SIZE-50, 50, IMAGE_SIZE-50-cLen)
-
-g2d.drawLine(IMAGE_SIZE-50, IMAGE_SIZE-50, IMAGE_SIZE-50-cLen, IMAGE_SIZE-50)
-g2d.drawLine(IMAGE_SIZE-50, IMAGE_SIZE-50, IMAGE_SIZE-50, IMAGE_SIZE-50-cLen)
-
-g2d.dispose()
-
-def fname = "art_${shapeType}_${paletteName}_${System.currentTimeMillis()}.png"
-ImageIO.write(img, "PNG", new File(fname))
-System.err.println "Saved art to: $fname"
+    g2d.dispose()
+    ImageIO.write(img, "PNG", imgFile)
+    System.err.println "Done."
+} catch (e) { e.printStackTrace() }
