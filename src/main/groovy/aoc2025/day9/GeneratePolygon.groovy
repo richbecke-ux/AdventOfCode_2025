@@ -1,3 +1,5 @@
+package aoc.day9
+
 import java.awt.geom.Line2D
 import javax.imageio.ImageIO
 import java.awt.image.BufferedImage
@@ -9,13 +11,16 @@ import java.awt.Color
 def TARGET_VERTICES = 2500
 def CANVAS_SIZE = 100000
 def IMAGE_SIZE = 10000
-def MIN_BOUND = 30000
-def MAX_BOUND = 70000
-def THICKNESS = 12000
+def MIN_BOUND = 20000
+def MAX_BOUND = 80000
+def THICKNESS = 17500
 def RANDOM_SEED = System.currentTimeMillis()
 
 // Argument parsing
 def shapeType = 'q'
+if (args.any { it == '-t' }) shapeType = 't'
+if (args.any { it == '-x' }) shapeType = 'x'
+if (args.any { it == '-s' }) shapeType = 's'
 if (args.any { it == '-l' }) shapeType = 'l'
 if (args.any { it == '-h' }) shapeType = 'h'
 if (args.any { it == '-c' }) shapeType = 'c'
@@ -122,22 +127,77 @@ System.err.println "Output: ${csvFile.name}"
 // BASE SHAPES
 // ============================================================
 def vertices = []
-def X0 = MIN_BOUND; def X1 = MIN_BOUND + THICKNESS
-def X2 = MAX_BOUND - THICKNESS; def X3 = MAX_BOUND
-def Y0 = MIN_BOUND; def Y1 = MIN_BOUND + THICKNESS
-def Y2 = MAX_BOUND - THICKNESS; def Y3 = MAX_BOUND
+
+// Hoved-grid
+def X0 = MIN_BOUND
+def X1 = MIN_BOUND + THICKNESS
+def X2 = MAX_BOUND - THICKNESS
+def X3 = MAX_BOUND
+
+def Y0 = MIN_BOUND
+def Y1 = MIN_BOUND + THICKNESS
+def Y2 = MAX_BOUND - THICKNESS
+def Y3 = MAX_BOUND
+
+// Midt-koordinater (Sentrert rundt 50,000)
+// Brukes for T, X og S for å lage "kryss" midt på kartet
+def XC1 = 50000 - (THICKNESS / 2).toInteger() // Midt-venstre
+def XC2 = 50000 + (THICKNESS / 2).toInteger() // Midt-høyre
+def YC1 = 50000 - (THICKNESS / 2).toInteger() // Midt-topp
+def YC2 = 50000 + (THICKNESS / 2).toInteger() // Midt-bunn
 
 switch (shapeType) {
-    case 'q': vertices = [[X0, Y0], [X3, Y0], [X3, Y3], [X0, Y3]]; break
-    case 'l': vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [X1, Y1], [X1, Y3], [X0, Y3]]; break
-    case 'c': vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [X1, Y1], [X1, Y2], [X3, Y2], [X3, Y3], [X0, Y3]]; break
-    case 'h':
-        def Y_MID_START = 50000 - (THICKNESS / 2).toInteger()
-        def Y_MID_END = 50000 + (THICKNESS / 2).toInteger()
-        vertices = [[X0, Y0], [X1, Y0], [X1, Y_MID_START], [X2, Y_MID_START], [X2, Y0], [X3, Y0],
-                    [X3, Y3], [X2, Y3], [X2, Y_MID_END], [X1, Y_MID_END], [X1, Y3], [X0, Y3]]; break
-}
+    case 'q': // Kvadrat
+        vertices = [[X0, Y0], [X3, Y0], [X3, Y3], [X0, Y3]]
+        break
 
+    case 'l': // L-form
+        vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [X1, Y1], [X1, Y3], [X0, Y3]]
+        break
+
+    case 'c': // C-form
+        vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [X1, Y1], [X1, Y2], [X3, Y2], [X3, Y3], [X0, Y3]]
+        break
+
+    case 'h': // H-form
+        vertices = [
+                [X0, Y0], [X1, Y0], [X1, YC1], [X2, YC1], [X2, Y0], [X3, Y0],
+                [X3, Y3], [X2, Y3], [X2, YC2], [X1, YC2], [X1, Y3], [X0, Y3]
+        ]
+        break
+
+    case 't': // T-form (Hammer)
+        vertices = [
+                [X0, Y0], [X3, Y0],     // Hele toppbjelken
+                [X3, Y1], [XC2, Y1],    // Inn under høyre vinge
+                [XC2, Y3], [XC1, Y3],   // Bunnen av stammen
+                [XC1, Y1], [X0, Y1]     // Opp stammen og ut under venstre vinge
+        ]
+        break
+
+    case 'x': // X-form (Pluss-tegn)
+        vertices = [
+                [XC1, Y0], [XC2, Y0],   // Topp av nord-arm
+                [XC2, YC1], [X3, YC1],  // Indre hjørne -> Tupll av øst-arm
+                [X3, YC2], [XC2, YC2],  // Bunn av øst-arm -> Indre hjørne
+                [XC2, Y3], [XC1, Y3],   // Bunn av sør-arm
+                [XC1, YC2], [X0, YC2],  // Indre hjørne -> Bunn av vest-arm
+                [X0, YC1], [XC1, YC1]   // Topp av vest-arm -> Indre hjørne
+        ]
+        break
+
+    case 's': // S-form (Tetris-brikke)
+        // To overlappende rektangler.
+        // Topp-rektangel er forskjøvet til høyre, bunn-rektangel til venstre.
+        vertices = [
+                [X1, Y0], [X3, Y0],     // Topp av øvre kloss (høyrejustert)
+                [X3, YC2], [XC2, YC2],  // Ned høyre side -> inn til midjen
+                [XC2, Y3], [X0, Y3],    // Ned til bunn av nedre kloss (venstrejustert)
+                [X0, YC1], [X1, YC1]    // Opp venstre side -> inn til "halsen"
+                // (Lukkes automatisk tilbake til X1, Y0)
+        ]
+        break
+}
 // ============================================================
 // HELPERS
 // ============================================================
