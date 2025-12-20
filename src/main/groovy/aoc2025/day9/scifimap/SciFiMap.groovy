@@ -29,6 +29,11 @@ def MAX_BOUND = 75000
 def THICKNESS = 15000
 def RANDOM_SEED = System.currentTimeMillis()
 
+// Fjord constraint parameters
+def ENTRANCE_DEPTH_RATIO = 0.35      // Entrance must be >= 35% of depth
+def AREA_ENTRANCE_RATIO = 0.25       // Entrance must be >= 25% of sqrt(total area)
+def MAX_NESTING_DEPTH = 4            // Maximum levels of nested concavity
+
 // Palettes: [Background, FillStart, FillEnd, Glow, Accent]
 def PALETTES = [
         0: [name: "Magma",    bg: new Color(10, 5, 5),    fill1: new Color(50, 10, 10), fill2: new Color(100, 30, 10), glow: new Color(255, 100, 0), accent: new Color(255, 200, 0)],
@@ -95,7 +100,7 @@ println "Targets   : ${TARGET_VERTICES} vertices"
 println "------------------------------------------------"
 
 // ============================================================
-// 3. PHASE CONFIGURATION (MODIFIED)
+// 3. PHASE CONFIGURATION
 // ============================================================
 def phases = [
         // MACRO: Massive increase in size (maxLen 45k, maxDepth 30k) to make large features truly large.
@@ -124,7 +129,7 @@ def phases = [
 ]
 
 // ============================================================
-// 4. LOGICAL EDGE SYSTEM
+// 4. LOGICAL EDGE SYSTEM (WITH FJORD TRACKING)
 // ============================================================
 
 class LogicalEdge {
@@ -138,11 +143,36 @@ class LogicalEdge {
     boolean isHoriz          // Whether the baseline is horizontal
     int steps                // Number of steps used
 
+    // Fjord tracking fields
+    LogicalEdge parentEdge = null    // The edge this feature was extruded from
+    long regionArea = 0              // Area added by this feature
+    long entranceWidth = 0           // Width of entrance to this region
+    int nestingDepth = 0             // How many levels deep into concave regions
+
     List<Double> getPerpendicular() {
         double dx = logicalEnd[0] - logicalStart[0]
         double dy = logicalEnd[1] - logicalStart[1]
         if (logicalLength < 0.001) return [0.0, 0.0]
         return [-dy / logicalLength, dx / logicalLength]
+    }
+
+    // Calculate narrowest entrance in the ancestry chain
+    long getNarrowestEntrance() {
+        long narrowest = (entranceWidth > 0) ? entranceWidth : Long.MAX_VALUE
+        if (parentEdge != null) {
+            long parentNarrowest = parentEdge.getNarrowestEntrance()
+            if (parentNarrowest < narrowest) narrowest = parentNarrowest
+        }
+        return (narrowest == Long.MAX_VALUE) ? 0 : narrowest
+    }
+
+    // Calculate total area in the ancestry chain
+    long getTotalRegionArea() {
+        long total = regionArea
+        if (parentEdge != null) {
+            total += parentEdge.getTotalRegionArea()
+        }
+        return total
     }
 
     List findAttachmentPoint(List<List<Long>> allVertices, double t) {
@@ -203,7 +233,7 @@ class LogicalEdge {
 
     @Override
     String toString() {
-        return "LogicalEdge[${type}, len=${(int)logicalLength}, verts=${vertexCount}, start=${logicalStart}]"
+        return "LogicalEdge[${type}, len=${(int)logicalLength}, nest=${nestingDepth}, entrance=${entranceWidth}]"
     }
 }
 
@@ -225,7 +255,11 @@ class EdgeRegistry {
                     vertexCount: 1,
                     direction: 0,
                     isHoriz: (v1[1] == v2[1]),
-                    steps: 0
+                    steps: 0,
+                    parentEdge: null,
+                    regionArea: 0,
+                    entranceWidth: 0,
+                    nestingDepth: 0
             )
         }
     }
@@ -244,27 +278,58 @@ class EdgeRegistry {
         return eligible[-1]
     }
 
-    void reindexAll() {
-        int currentIdx = 0
-        for (edge in edges) {
+    // Efficient splice that only updates affected indices
+    void spliceEdges(int edgeIndex, LogicalEdge oldEdge, List<LogicalEdge> newEdges) {
+        // Calculate the vertex count delta
+        int oldVertCount = oldEdge.vertexCount
+        int newVertCount = newEdges.sum { it.vertexCount } ?: 0
+        int delta = newVertCount - oldVertCount
+
+        // Set indices for new edges starting from old edge's position
+        int currentIdx = oldEdge.vertexStartIdx
+        for (edge in newEdges) {
             edge.vertexStartIdx = currentIdx
             currentIdx += edge.vertexCount
+        }
+
+        // Remove old, insert new
+        edges.remove(edgeIndex)
+        edges.addAll(edgeIndex, newEdges)
+
+        // Only update edges AFTER the insertion point
+        if (delta != 0) {
+            for (int i = edgeIndex + newEdges.size(); i < edges.size(); i++) {
+                edges[i].vertexStartIdx += delta
+            }
         }
     }
 
     int getTotalVertexCount() {
-        return edges.sum { it.vertexCount } ?: 0
+        if (edges.isEmpty()) return 0
+        def last = edges[-1]
+        return last.vertexStartIdx + last.vertexCount
     }
 
     int findEdgeContaining(int vertexIdx) {
-        for (int i = 0; i < edges.size(); i++) {
-            def edge = edges[i]
-            if (vertexIdx >= edge.vertexStartIdx &&
-                    vertexIdx < edge.vertexStartIdx + edge.vertexCount) {
-                return i
+        // Binary search - edges are always sorted by vertexStartIdx
+        int lo = 0, hi = edges.size() - 1
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1
+            def edge = edges[mid]
+            int edgeEnd = edge.vertexStartIdx + edge.vertexCount
+            if (vertexIdx < edge.vertexStartIdx) {
+                hi = mid - 1
+            } else if (vertexIdx >= edgeEnd) {
+                lo = mid + 1
+            } else {
+                return mid
             }
         }
         return -1
+    }
+
+    int findEdgeIndex(LogicalEdge target) {
+        return edges.indexOf(target)
     }
 }
 
@@ -456,9 +521,12 @@ def spliceFeature = { List<List<Long>> vertices, int startVertexIdx, boolean sta
 
 def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
                            List<Long> n3, List<Long> n4, int steps,
-                           boolean extrudeVertically, int direction, List<List<Long>> featureVerts ->
+                           boolean extrudeVertically, int direction, List<List<Long>> featureVerts,
+                           LogicalEdge parentEdge, long entranceWidth, long featureArea ->
 
     def newEdges = []
+    int newNestingDepth = (parentEdge != null) ? parentEdge.nestingDepth + 1 : 1
+    long areaPerEdge = 0  // Will be set after we know edge count
 
     if (featureType == 'box') {
         newEdges << new LogicalEdge(
@@ -466,21 +534,24 @@ def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
                 logicalStart: [n1[0], n1[1]],
                 logicalEnd: [n2[0], n2[1]],
                 logicalLength: Math.hypot(n2[0] - n1[0], n2[1] - n1[1]),
-                vertexStartIdx: 0, vertexCount: 2, direction: direction, isHoriz: !extrudeVertically, steps: 0
+                vertexStartIdx: 0, vertexCount: 2, direction: direction, isHoriz: !extrudeVertically, steps: 0,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
         newEdges << new LogicalEdge(
                 type: 'orthogonal',
                 logicalStart: [n2[0], n2[1]],
                 logicalEnd: [n3[0], n3[1]],
                 logicalLength: Math.hypot(n3[0] - n2[0], n3[1] - n2[1]),
-                vertexStartIdx: 0, vertexCount: 1, direction: direction, isHoriz: extrudeVertically, steps: 0
+                vertexStartIdx: 0, vertexCount: 1, direction: direction, isHoriz: extrudeVertically, steps: 0,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
         newEdges << new LogicalEdge(
                 type: 'orthogonal',
                 logicalStart: [n3[0], n3[1]],
                 logicalEnd: [n4[0], n4[1]],
                 logicalLength: Math.hypot(n4[0] - n3[0], n4[1] - n3[1]),
-                vertexStartIdx: 0, vertexCount: 2, direction: direction, isHoriz: !extrudeVertically, steps: 0
+                vertexStartIdx: 0, vertexCount: 2, direction: direction, isHoriz: !extrudeVertically, steps: 0,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
     } else if (featureType == 'pyramid') {
         int stairUpVerts = steps > 0 ? (steps + 1) * 2 : 2
@@ -490,21 +561,24 @@ def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
                 logicalStart: [n1[0], n1[1]],
                 logicalEnd: [n2[0], n2[1]],
                 logicalLength: Math.hypot(n2[0] - n1[0], n2[1] - n1[1]),
-                vertexStartIdx: 0, vertexCount: stairUpVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps
+                vertexStartIdx: 0, vertexCount: stairUpVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
         newEdges << new LogicalEdge(
                 type: 'orthogonal',
                 logicalStart: [n2[0], n2[1]],
                 logicalEnd: [n3[0], n3[1]],
                 logicalLength: Math.hypot(n3[0] - n2[0], n3[1] - n2[1]),
-                vertexStartIdx: 0, vertexCount: 1, direction: direction, isHoriz: extrudeVertically, steps: 0
+                vertexStartIdx: 0, vertexCount: 1, direction: direction, isHoriz: extrudeVertically, steps: 0,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
         newEdges << new LogicalEdge(
                 type: 'diagonal',
                 logicalStart: [n3[0], n3[1]],
                 logicalEnd: [n4[0], n4[1]],
                 logicalLength: Math.hypot(n4[0] - n3[0], n4[1] - n3[1]),
-                vertexStartIdx: 0, vertexCount: stairDownVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps
+                vertexStartIdx: 0, vertexCount: stairDownVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
     } else if (featureType == 'round') {
         int curveVerts = steps > 0 ? (steps + 1) * 2 : 2
@@ -513,24 +587,34 @@ def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
                 logicalStart: [n1[0], n1[1]],
                 logicalEnd: [n2[0], n2[1]],
                 logicalLength: Math.hypot(n2[0] - n1[0], n2[1] - n1[1]),
-                vertexStartIdx: 0, vertexCount: curveVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps
+                vertexStartIdx: 0, vertexCount: curveVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
         newEdges << new LogicalEdge(
                 type: 'curve',
                 logicalStart: [n3[0], n3[1]],
                 logicalEnd: [n4[0], n4[1]],
                 logicalLength: Math.hypot(n4[0] - n3[0], n4[1] - n3[1]),
-                vertexStartIdx: 0, vertexCount: curveVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps
+                vertexStartIdx: 0, vertexCount: curveVerts - 1, direction: direction, isHoriz: extrudeVertically, steps: steps,
+                parentEdge: parentEdge, nestingDepth: newNestingDepth, entranceWidth: entranceWidth, regionArea: 0
         )
     }
+
+    // Distribute area across edges
+    if (!newEdges.isEmpty()) {
+        areaPerEdge = featureArea / newEdges.size()
+        newEdges.each { it.regionArea = areaPerEdge }
+    }
+
     return newEdges
 }
 
 def updateRegistry = { EdgeRegistry registry, int edgeIndex, LogicalEdge originalEdge,
                        double t1, double t2, List<Long> splitPt1, List<Long> splitPt2,
-                       List<LogicalEdge> featureEdges, int removedVertexCount, int addedVertexCount ->
+                       List<LogicalEdge> featureEdges, int featureVertCount ->
 
     def replacementEdges = []
+
     if (t1 > 0.01) {
         double remainingFraction = t1
         int remainingVerts = Math.max(1, (int)(originalEdge.vertexCount * remainingFraction))
@@ -543,10 +627,28 @@ def updateRegistry = { EdgeRegistry registry, int edgeIndex, LogicalEdge origina
                 vertexCount: remainingVerts,
                 direction: originalEdge.direction,
                 isHoriz: originalEdge.isHoriz,
-                steps: Math.max(0, (int)(originalEdge.steps * t1))
+                steps: Math.max(0, (int)(originalEdge.steps * t1)),
+                parentEdge: originalEdge.parentEdge,
+                nestingDepth: originalEdge.nestingDepth,
+                entranceWidth: originalEdge.entranceWidth,
+                regionArea: 0
         )
     }
+
+    // Set vertex counts for feature edges
+    int vertsPerEdge = Math.max(1, featureVertCount / featureEdges.size())
+    int remaining = featureVertCount
+    for (int i = 0; i < featureEdges.size(); i++) {
+        if (i == featureEdges.size() - 1) {
+            featureEdges[i].vertexCount = remaining
+        } else {
+            featureEdges[i].vertexCount = vertsPerEdge
+            remaining -= vertsPerEdge
+        }
+    }
+
     replacementEdges.addAll(featureEdges)
+
     if (t2 < 0.99) {
         double remainingFraction = 1.0 - t2
         int remainingVerts = Math.max(1, (int)(originalEdge.vertexCount * remainingFraction))
@@ -559,12 +661,16 @@ def updateRegistry = { EdgeRegistry registry, int edgeIndex, LogicalEdge origina
                 vertexCount: remainingVerts,
                 direction: originalEdge.direction,
                 isHoriz: originalEdge.isHoriz,
-                steps: Math.max(0, (int)(originalEdge.steps * (1.0 - t2)))
+                steps: Math.max(0, (int)(originalEdge.steps * (1.0 - t2))),
+                parentEdge: originalEdge.parentEdge,
+                nestingDepth: originalEdge.nestingDepth,
+                entranceWidth: originalEdge.entranceWidth,
+                regionArea: 0
         )
     }
-    registry.edges.remove(edgeIndex)
-    registry.edges.addAll(edgeIndex, replacementEdges)
-    registry.reindexAll()
+
+    // Use efficient splice instead of remove + addAll + reindexAll
+    registry.spliceEdges(edgeIndex, originalEdge, replacementEdges)
 }
 
 // ============================================================
@@ -636,7 +742,7 @@ def edgeRegistry = new EdgeRegistry()
 edgeRegistry.initializeFromVertices(vertices)
 
 // ============================================================
-// 8. GENERATION LOOP (MODIFIED)
+// 8. GENERATION LOOP (WITH FJORD CONSTRAINTS)
 // ============================================================
 def spatialIndex = new SpatialIndex()
 spatialIndex.rebuild(vertices)
@@ -653,6 +759,8 @@ phases.each { phase ->
     int rejectedProximity = 0
     int rejectedJTS = 0
     int rejectedFinalOrthogonal = 0
+    int rejectedFjordConstraint = 0
+    int rejectedNestingDepth = 0
 
     while (totalFails < maxTotalFails) {
         if (phase.count != -1 && modificationsMade >= phase.count) break
@@ -706,6 +814,60 @@ phases.each { phase ->
             int direction = (edgeRetries % 2 != 0) ? 1 : -1
             if (!startWithOutward) direction *= -1
 
+            // Calculate proposed entrance width
+            long proposedEntranceWidth = (long)(segmentLen * (t2 - t1))
+            if (proposedEntranceWidth < 1) proposedEntranceWidth = segmentLen
+
+            // Check nesting depth limit - only allow outward extrusions at max depth
+            if (selectedEdge.nestingDepth >= MAX_NESTING_DEPTH) {
+                if (direction == -selectedEdge.direction && selectedEdge.direction != 0) {
+                    rejectedNestingDepth++
+                    continue
+                }
+            }
+
+            // Constraint 1: Entrance width relative to depth
+            long minEntranceForDepth = (long)(depth * ENTRANCE_DEPTH_RATIO)
+            if (proposedEntranceWidth < minEntranceForDepth) {
+                // Reduce depth to satisfy constraint
+                long adjustedDepth = (long)(proposedEntranceWidth / ENTRANCE_DEPTH_RATIO)
+                if (adjustedDepth < phase.minDepth) {
+                    rejectedFjordConstraint++
+                    continue
+                }
+                depth = adjustedDepth
+            }
+
+            // Constraint 2: Check ancestry chain for bottlenecks
+            long newArea = depth * proposedEntranceWidth  // Approximate rectangle
+            long totalAreaIfAdded = selectedEdge.getTotalRegionArea() + newArea
+            long minEntranceForArea = (long)(Math.sqrt(totalAreaIfAdded) * AREA_ENTRANCE_RATIO)
+
+            long narrowestInChain = selectedEdge.getNarrowestEntrance()
+            if (narrowestInChain == 0) narrowestInChain = Long.MAX_VALUE
+
+            long effectiveNarrowest = Math.min(narrowestInChain, proposedEntranceWidth)
+
+            if (effectiveNarrowest < minEntranceForArea) {
+                // Either widen entrance or reduce feature size
+                // Option: Reduce depth to bring area down
+                long maxAllowableArea = (long)Math.pow(effectiveNarrowest / AREA_ENTRANCE_RATIO, 2)
+                long maxAreaFromThisFeature = maxAllowableArea - selectedEdge.getTotalRegionArea()
+
+                if (maxAreaFromThisFeature < phase.minLen * phase.minDepth) {
+                    rejectedFjordConstraint++
+                    continue
+                }
+
+                // Adjust depth to fit within area budget
+                long adjustedDepth = maxAreaFromThisFeature / proposedEntranceWidth
+                if (adjustedDepth < phase.minDepth) {
+                    rejectedFjordConstraint++
+                    continue
+                }
+                depth = Math.min(depth, adjustedDepth)
+            }
+
             String featureType = phase.types[rnd.nextInt(phase.types.size())]
 
             def (startIdx, startNeedsSplit, startPt) = selectedEdge.findAttachmentPoint(vertices, t1)
@@ -738,6 +900,9 @@ phases.each { phase ->
             long actualSegmentLen = extrudeVertically ?
                     Math.abs(n4[0] - n1[0]) : Math.abs(n4[1] - n1[1])
             if (actualSegmentLen < phase.minLen * 0.5) continue
+
+            // Recalculate feature area with final dimensions
+            long featureArea = depth * actualSegmentLen
 
             def featureVerts = []
             int steps = phase.steps
@@ -861,30 +1026,16 @@ phases.each { phase ->
 
             if (isValidPoly) {
                 featureTypeCounts[featureType]++
-                int oldVertexCount = vertices.size()
                 vertices = tempVertices
-                int newVertexCount = vertices.size()
 
-                int edgeIdx = edgeRegistry.edges.indexOf(selectedEdge)
+                int edgeIdx = edgeRegistry.findEdgeIndex(selectedEdge)
                 if (edgeIdx >= 0) {
                     def featureEdges = createFeatureEdges(featureType, n1, n2, n3, n4,
-                            steps, extrudeVertically, direction, featureVerts)
-
-                    int featureVertCount = featureVerts.size()
-                    int vertsPerEdge = Math.max(1, featureVertCount / featureEdges.size())
-                    int remaining = featureVertCount
-                    for (int i = 0; i < featureEdges.size(); i++) {
-                        if (i == featureEdges.size() - 1) {
-                            featureEdges[i].vertexCount = remaining
-                        } else {
-                            featureEdges[i].vertexCount = vertsPerEdge
-                            remaining -= vertsPerEdge
-                        }
-                    }
+                            steps, extrudeVertically, direction, featureVerts,
+                            selectedEdge, actualSegmentLen, featureArea)
 
                     updateRegistry(edgeRegistry, edgeIdx, selectedEdge, t1, t2,
-                            startPt, endPt, featureEdges,
-                            oldVertexCount - newVertexCount, featureVerts.size())
+                            startPt, endPt, featureEdges, featureVerts.size())
                 }
 
                 spatialIndex.rebuild(vertices)
@@ -899,6 +1050,7 @@ phases.each { phase ->
     System.err.println "\nPhase ${phase.name} complete. Edges: ${edgeRegistry.edges.size()}"
     System.err.println "  Features: box=${featureTypeCounts.box}, pyramid=${featureTypeCounts.pyramid}, round=${featureTypeCounts.round}"
     System.err.println "  Rejected: orthogonal=${rejectedOrthogonal}, proximity=${rejectedProximity}, JTS=${rejectedJTS}, finalOrth=${rejectedFinalOrthogonal}"
+    System.err.println "  Fjord constraints: entrance/area=${rejectedFjordConstraint}, nesting=${rejectedNestingDepth}"
 }
 
 // File Names
@@ -975,7 +1127,7 @@ try {
     g2d.setFont(new Font("Monospaced", Font.BOLD, 40))
     g2d.drawString("ENTITY: ${shapeType.toUpperCase()}-CLASS FRACTAL", 100, 100)
     g2d.setFont(new Font("Monospaced", Font.PLAIN, 24))
-    g2d.drawString("VERTICES: ${vertices.size()} // PALETTE: ${currentPalette.name.toUpperCase()} // LOGICAL EDGES: ${edgeRegistry.edges.size()}", 100, 120)
+    g2d.drawString("VERTICES: ${vertices.size()} // PALETTE: ${currentPalette.name.toUpperCase()} // LOGICAL EDGES: ${edgeRegistry.edges.size()}", 100, 140)
 
     int cLen = 150
     int pad = 50
