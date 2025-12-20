@@ -1,4 +1,4 @@
-package aoc.day9
+package aoc2025.day9
 
 import java.awt.geom.Line2D
 import javax.imageio.ImageIO
