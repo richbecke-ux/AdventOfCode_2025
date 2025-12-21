@@ -58,9 +58,9 @@ def rnd = new Random(RANDOM_SEED)
 def printUsage = {
     println "Usage: groovy script.groovy [options]"
     println "Options:"
-    println "  -q, -l, -c, -h, -t, -x, -s  : Select base shape (Default: Random)"
-    println "  -p <n>                      : Select palette by number (Default: Random)"
-    println "  -?                          : Show this help"
+    println "  -q, -l, -c, -h, -t, -x, -s, -π  : Select base shape (Default: Random)"
+    println "  -p <n>                          : Select palette by number (Default: Random)"
+    println "  -?                              : Show this help"
     println "\nAvailable Palettes:"
     PALETTES.each { id, p -> println "  ${id}: ${p.name}" }
     System.exit(0)
@@ -68,17 +68,18 @@ def printUsage = {
 
 if (args.contains("-?") || args.contains("-help")) printUsage()
 
-def shapes = ['q', 'l', 'c', 'h', 't', 'x', 's']
+def shapes = ['q', 'l', 'c', 'h', 't', 'x', 'π', 's']
 def shapeType = null
 if (args.any { it == '-t' }) shapeType = 't'
 if (args.any { it == '-x' }) shapeType = 'x'
 if (args.any { it == '-s' }) shapeType = 's'
+if (args.any { it == '-π' }) shapeType = 'π'
 if (args.any { it == '-l' }) shapeType = 'l'
 if (args.any { it == '-h' }) shapeType = 'h'
 if (args.any { it == '-c' }) shapeType = 'c'
 if (args.any { it == '-q' }) shapeType = 'q'
 if (!shapeType) shapeType = shapes[rnd.nextInt(shapes.size())]
-
+shapeType = 'π'
 def paletteId = -1
 def pIndex = args.findIndexOf { it == '-p' }
 if (pIndex > -1 && pIndex + 1 < args.size() && args[pIndex+1].isNumber()) {
@@ -881,6 +882,11 @@ def Y0 = MIN_BOUND; def Y1 = MIN_BOUND + THICKNESS
 def Y2 = MAX_BOUND - THICKNESS; def Y3 = MAX_BOUND
 def XC1 = 50000 - (THICKNESS / 2).toInteger(); def XC2 = 50000 + (THICKNESS / 2).toInteger()
 def YC1 = 50000 - (THICKNESS / 2).toInteger(); def YC2 = 50000 + (THICKNESS / 2).toInteger()
+def STEM_INSET = 5000  // How far stems are inset from the bar edges
+def PI_LEFT_OUTER = X0 + STEM_INSET           // 30000
+def PI_LEFT_INNER = PI_LEFT_OUTER + THICKNESS // 45000
+def PI_RIGHT_INNER = X3 - STEM_INSET - THICKNESS // 55000
+def PI_RIGHT_OUTER = X3 - STEM_INSET          // 70000
 
 switch (shapeType) {
     case 'q': vertices = [[X0, Y0], [X3, Y0], [X3, Y3], [X0, Y3]]; break
@@ -888,6 +894,8 @@ switch (shapeType) {
     case 'c': vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [X1, Y1], [X1, Y2], [X3, Y2], [X3, Y3], [X0, Y3]]; break
     case 'h': vertices = [[X0, Y0], [X1, Y0], [X1, YC1], [X2, YC1], [X2, Y0], [X3, Y0], [X3, Y3], [X2, Y3], [X2, YC2], [X1, YC2], [X1, Y3], [X0, Y3]]; break
     case 't': vertices = [[X0, Y0], [X3, Y0], [X3, Y1], [XC2, Y1], [XC2, Y3], [XC1, Y3], [XC1, Y1], [X0, Y1]]; break
+    case 'π': vertices = [
+            [X0 - 10000, Y0], [X3 + 10000, Y0], [X3 + 10000, Y1], [PI_RIGHT_OUTER, Y1], [PI_RIGHT_OUTER, Y3], [PI_RIGHT_INNER, Y3], [PI_RIGHT_INNER, Y1], [PI_LEFT_INNER, Y1], [PI_LEFT_INNER, Y3], [PI_LEFT_OUTER, Y3], [PI_LEFT_OUTER, Y1], [X0 - 10000, Y1]]; break
     case 'x': vertices = [[XC1, Y0], [XC2, Y0], [XC2, YC1], [X3, YC1], [X3, YC2], [XC2, YC2], [XC2, Y3], [XC1, Y3], [XC1, YC2], [X0, YC2], [X0, YC1], [XC1, YC1]]; break
     case 's': vertices = [[X1, Y0], [X3, Y0], [X3, YC2], [XC2, YC2], [XC2, Y3], [X0, Y3], [X0, YC1], [X1, YC1]]; break
 }
@@ -1247,12 +1255,36 @@ RadialGradientPaint bgPaint = new RadialGradientPaint(center, radius, dist, colo
 g2d.setPaint(bgPaint)
 g2d.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE)
 
-double sc = IMAGE_SIZE / CANVAS_SIZE
+// Calculate actual bounding box of the polygon
+long polyMinX = vertices.collect { it[0] }.min()
+long polyMaxX = vertices.collect { it[0] }.max()
+long polyMinY = vertices.collect { it[1] }.min()
+long polyMaxY = vertices.collect { it[1] }.max()
+long polyWidth = polyMaxX - polyMinX
+long polyHeight = polyMaxY - polyMinY
+
+System.err.println "Polygon bounds: X=[${polyMinX}, ${polyMaxX}], Y=[${polyMinY}, ${polyMaxY}]"
+System.err.println "Polygon size: ${polyWidth} x ${polyHeight}"
+
+// Calculate scale to fit polygon in image with padding
+double imagePadding = IMAGE_SIZE * 0.05  // 5% padding on each side
+double availableSize = IMAGE_SIZE - 2 * imagePadding
+double scaleX = availableSize / polyWidth
+double scaleY = availableSize / polyHeight
+double sc = Math.min(scaleX, scaleY)  // Uniform scale to preserve aspect ratio
+
+// Calculate offset to center the polygon
+double polyCenterX = (polyMinX + polyMaxX) / 2.0
+double polyCenterY = (polyMinY + polyMaxY) / 2.0
+double imageCenterX = IMAGE_SIZE / 2.0
+double imageCenterY = IMAGE_SIZE / 2.0
+double offsetX = imageCenterX - polyCenterX * sc
+double offsetY = imageCenterY - polyCenterY * sc
 
 Path2D poly = new Path2D.Double()
 vertices.eachWithIndex { v, i ->
-    double x = v[0] * sc
-    double y = v[1] * sc
+    double x = v[0] * sc + offsetX
+    double y = v[1] * sc + offsetY
     if (i == 0) poly.moveTo(x, y) else poly.lineTo(x, y)
 }
 poly.closePath()
@@ -1274,11 +1306,11 @@ for (int i = 0; i < IMAGE_SIZE; i += scanSpacing) {
 g2d.setClip(null)
 
 float strokeWidth = (float) (1000 * sc)
-g2d.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+g2d.setStroke(new BasicStroke(Math.max(strokeWidth, 2.0f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
 g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 60))
 g2d.draw(poly)
 
-g2d.setStroke(new BasicStroke((float) (strokeWidth * 0.15f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+g2d.setStroke(new BasicStroke(Math.max((float) (strokeWidth * 0.15f), 1.0f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
 g2d.setColor(currentPalette.glow)
 g2d.draw(poly)
 
