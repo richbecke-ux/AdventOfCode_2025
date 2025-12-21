@@ -29,16 +29,13 @@ def MAX_BOUND = 75000
 def THICKNESS = 15000
 def RANDOM_SEED = System.currentTimeMillis()
 
-// Boundary margins - features must stay within these bounds
-def BOUNDARY_MARGIN = 1000
-
 // Fjord constraint parameters
 def ENTRANCE_DEPTH_RATIO = 0.35      // Entrance must be >= 35% of depth
 def AREA_ENTRANCE_RATIO = 0.25       // Entrance must be >= 25% of sqrt(total area)
 def MAX_NESTING_DEPTH = 4            // Maximum levels of nested concavity
 
 // Spatial distribution parameters
-def ACTIVITY_CELL_SIZE = 5000        // Grid cell size for tracking activity
+def REGION_GRID_SIZE = 7             // 7x7 = 49 regions
 def ACTIVITY_DECAY = 0.7             // How much activity decays each phase (0-1)
 def ACTIVITY_PENALTY_WEIGHT = 0.3    // How much activity reduces selection probability (0-1)
 
@@ -142,8 +139,8 @@ class ActivityTracker {
     double decayFactor
     double penaltyWeight
 
-    ActivityTracker(int cellSize, double decay, double penalty) {
-        this.cellSize = cellSize
+    ActivityTracker(int canvasSize, int gridSize, double decay, double penalty) {
+        this.cellSize = canvasSize / gridSize
         this.decayFactor = decay
         this.penaltyWeight = penalty
     }
@@ -160,7 +157,6 @@ class ActivityTracker {
     }
 
     void recordActivityForEdge(List<Long> start, List<Long> end, double amount = 1.0) {
-        // Record activity along the entire edge
         long midX = (start[0] + end[0]) / 2
         long midY = (start[1] + end[1]) / 2
         recordActivity(start[0], start[1], amount * 0.5)
@@ -181,12 +177,9 @@ class ActivityTracker {
                         getActivity(end[0], end[1])))
     }
 
-    // Returns a weight multiplier (0 to 1) based on activity
-    // High activity = lower weight
     double getSelectionWeight(List<Long> start, List<Long> end) {
         double act = getActivityForEdge(start, end)
         if (act <= 0) return 1.0
-        // Exponential decay of selection probability with activity
         return Math.exp(-penaltyWeight * act)
     }
 
@@ -194,13 +187,86 @@ class ActivityTracker {
         activity.each { k, v ->
             activity[k] = v * decayFactor
         }
-        // Remove very small values
         activity = activity.findAll { k, v -> v > 0.01 }
     }
 }
 
 // ============================================================
-// 5. LOGICAL EDGE SYSTEM (SIMPLIFIED - removed broken direction tracking)
+// 5. REGION-BASED EDGE SELECTOR
+// ============================================================
+
+class RegionSelector {
+    int gridSize
+    int cellSize
+    int canvasSize
+
+    RegionSelector(int canvasSize, int gridSize) {
+        this.canvasSize = canvasSize
+        this.gridSize = gridSize
+        this.cellSize = canvasSize / gridSize
+    }
+
+    // Get region key for a point
+    String getRegionKey(long x, long y) {
+        int rx = Math.max(0, Math.min(gridSize - 1, (x / cellSize).toInteger()))
+        int ry = Math.max(0, Math.min(gridSize - 1, (y / cellSize).toInteger()))
+        return "${rx}_${ry}"
+    }
+
+    // Get region key for an edge (using midpoint)
+    String getEdgeRegion(def edge) {
+        long midX = (edge.logicalStart[0] + edge.logicalEnd[0]) / 2
+        long midY = (edge.logicalStart[1] + edge.logicalEnd[1]) / 2
+        return getRegionKey(midX, midY)
+    }
+
+    // Select an edge using region-first strategy
+    def selectEdge(List edges, double minLength, Random rnd, ActivityTracker activity) {
+        // Build map of region -> eligible edges
+        Map<String, List> regionEdges = [:]
+
+        for (edge in edges) {
+            if (edge.logicalLength >= minLength) {
+                String region = getEdgeRegion(edge)
+                if (!regionEdges.containsKey(region)) {
+                    regionEdges[region] = []
+                }
+                regionEdges[region] << edge
+            }
+        }
+
+        // Filter to non-empty regions
+        def nonEmptyRegions = regionEdges.keySet().toList()
+        if (nonEmptyRegions.isEmpty()) return null
+
+        // Randomly select a region (uniform probability)
+        String selectedRegion = nonEmptyRegions[rnd.nextInt(nonEmptyRegions.size())]
+        def eligibleEdges = regionEdges[selectedRegion]
+
+        if (eligibleEdges.isEmpty()) return null
+
+        // Within the region, select edge weighted by length * activity penalty
+        def weights = eligibleEdges.collect { edge ->
+            double lengthWeight = edge.logicalLength
+            double activityWeight = activity.getSelectionWeight(edge.logicalStart, edge.logicalEnd)
+            return lengthWeight * activityWeight
+        }
+
+        double totalWeight = weights.sum()
+        if (totalWeight <= 0) return eligibleEdges[rnd.nextInt(eligibleEdges.size())]
+
+        double r = rnd.nextDouble() * totalWeight
+        double acc = 0
+        for (int i = 0; i < eligibleEdges.size(); i++) {
+            acc += weights[i]
+            if (r <= acc) return eligibleEdges[i]
+        }
+        return eligibleEdges[-1]
+    }
+}
+
+// ============================================================
+// 6. LOGICAL EDGE SYSTEM
 // ============================================================
 
 class LogicalEdge {
@@ -214,7 +280,7 @@ class LogicalEdge {
     boolean isHoriz          // Whether the baseline is horizontal
     int steps                // Number of steps used
 
-    // Fjord tracking - simplified
+    // Fjord tracking
     int nestingDepth = 0             // How many levels deep into concave regions
     long entranceWidth = 0           // Width of entrance to this region
     long regionArea = 0              // Area added by this feature
@@ -226,7 +292,6 @@ class LogicalEdge {
         return [-dy / logicalLength, dx / logicalLength]
     }
 
-    // Get midpoint of this edge
     List<Long> getMidpoint() {
         return [((logicalStart[0] + logicalEnd[0]) / 2) as long,
                 ((logicalStart[1] + logicalEnd[1]) / 2) as long]
@@ -320,30 +385,6 @@ class EdgeRegistry {
         }
     }
 
-    // Modified to incorporate activity-based weighting
-    LogicalEdge selectWeightedEdge(double minLength, Random rnd, ActivityTracker activity) {
-        def eligible = edges.findAll { it.logicalLength >= minLength }
-        if (eligible.isEmpty()) return null
-
-        // Calculate weights: length * activity penalty
-        def weights = eligible.collect { edge ->
-            double lengthWeight = edge.logicalLength
-            double activityWeight = activity.getSelectionWeight(edge.logicalStart, edge.logicalEnd)
-            return lengthWeight * activityWeight
-        }
-
-        double totalWeight = weights.sum()
-        if (totalWeight <= 0) return eligible[rnd.nextInt(eligible.size())]
-
-        double r = rnd.nextDouble() * totalWeight
-        double acc = 0
-        for (int i = 0; i < eligible.size(); i++) {
-            acc += weights[i]
-            if (r <= acc) return eligible[i]
-        }
-        return eligible[-1]
-    }
-
     void spliceEdges(int edgeIndex, LogicalEdge oldEdge, List<LogicalEdge> newEdges) {
         int oldVertCount = oldEdge.vertexCount
         int newVertCount = newEdges.sum { it.vertexCount } ?: 0
@@ -377,7 +418,7 @@ class EdgeRegistry {
 }
 
 // ============================================================
-// 6. GEOMETRY HELPERS
+// 7. GEOMETRY HELPERS
 // ============================================================
 
 def gf = new GeometryFactory()
@@ -398,24 +439,12 @@ def pointsEqual = { p1, p2, long tolerance = 1 ->
             Math.abs(p1[1] - p2[1]) <= tolerance
 }
 
-def checkBounds = { List<List<Long>> points, long minB, long maxB, long margin ->
-    for (pt in points) {
-        if (pt[0] < minB + margin || pt[0] > maxB - margin ||
-                pt[1] < minB + margin || pt[1] > maxB - margin) {
-            return false
-        }
-    }
-    return true
-}
-
 // Check if extruding in a given direction creates a concavity (goes "inward")
-// by testing if the extruded midpoint is inside the current polygon
 def isInwardExtrusion = { List<List<Long>> vertices, List<Long> edgeMidpoint,
                           boolean extrudeVertically, int direction, long depth,
                           GeometryFactory factory ->
-    // Calculate where the extrusion would go
     long testX, testY
-    long testDist = Math.min(depth / 2, 500)  // Test partway into the extrusion
+    long testDist = Math.min(depth / 2, 500)
 
     if (extrudeVertically) {
         testX = edgeMidpoint[0]
@@ -430,27 +459,6 @@ def isInwardExtrusion = { List<List<Long>> vertices, List<Long> edgeMidpoint,
 
     def testPoint = factory.createPoint(new Coordinate(testX as double, testY as double))
     return poly.contains(testPoint)
-}
-
-// Calculate cumulative nesting for an inward extrusion
-def calculateNestingDepth = { List<List<Long>> vertices, List<Long> n1, List<Long> n2,
-                              List<Long> n3, List<Long> n4, GeometryFactory factory ->
-    // Sample points along the feature to estimate how deep we're going
-    Polygon poly = toJTSPolygon(vertices, factory)
-    if (poly == null) return 0
-
-    // The deepest point is the midpoint of n2-n3 (the "back" of the extrusion)
-    long deepX = (n2[0] + n3[0]) / 2
-    long deepY = (n2[1] + n3[1]) / 2
-
-    // If this point is already inside the polygon, we're creating a concavity
-    def deepPoint = factory.createPoint(new Coordinate(deepX as double, deepY as double))
-    if (poly.contains(deepPoint)) {
-        // Estimate depth by checking how far we'd have to go to exit
-        // This is a simplification - just return 1 for now
-        return 1
-    }
-    return 0
 }
 
 def generateLinearStairVertices = { start, end, int steps ->
@@ -623,7 +631,6 @@ def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
                            int parentNestingDepth, boolean isInward, long entranceWidth, long featureArea ->
 
     def newEdges = []
-    // Only increment nesting if this is an inward extrusion
     int newNestingDepth = isInward ? parentNestingDepth + 1 : Math.max(0, parentNestingDepth - 1)
 
     if (featureType == 'box') {
@@ -698,7 +705,6 @@ def createFeatureEdges = { String featureType, List<Long> n1, List<Long> n2,
         )
     }
 
-    // Distribute area across edges
     if (!newEdges.isEmpty() && isInward) {
         long areaPerEdge = featureArea / newEdges.size()
         newEdges.each { it.regionArea = areaPerEdge }
@@ -772,7 +778,7 @@ def updateRegistry = { EdgeRegistry registry, int edgeIndex, LogicalEdge origina
 }
 
 // ============================================================
-// 7. SPATIAL INDEX
+// 8. SPATIAL INDEX
 // ============================================================
 
 class SpatialIndex {
@@ -816,7 +822,7 @@ class SpatialIndex {
 }
 
 // ============================================================
-// 8. BASE SHAPES
+// 9. BASE SHAPES
 // ============================================================
 def vertices = []
 def X0 = MIN_BOUND; def X1 = MIN_BOUND + THICKNESS
@@ -840,12 +846,13 @@ def edgeRegistry = new EdgeRegistry()
 edgeRegistry.initializeFromVertices(vertices)
 
 // ============================================================
-// 9. GENERATION LOOP
+// 10. GENERATION LOOP
 // ============================================================
 def spatialIndex = new SpatialIndex()
 spatialIndex.rebuild(vertices)
 
-def activityTracker = new ActivityTracker(ACTIVITY_CELL_SIZE, ACTIVITY_DECAY, ACTIVITY_PENALTY_WEIGHT)
+def activityTracker = new ActivityTracker(CANVAS_SIZE, REGION_GRID_SIZE, ACTIVITY_DECAY, ACTIVITY_PENALTY_WEIGHT)
+def regionSelector = new RegionSelector(CANVAS_SIZE, REGION_GRID_SIZE)
 
 phases.each { phase ->
     System.err.println "Starting Phase: ${phase.name} (Vertices: ${vertices.size()}, Edges: ${edgeRegistry.edges.size()})"
@@ -861,7 +868,6 @@ phases.each { phase ->
     int rejectedFinalOrthogonal = 0
     int rejectedFjordConstraint = 0
     int rejectedNestingDepth = 0
-    int rejectedBoundary = 0
     int inwardCount = 0
     int outwardCount = 0
 
@@ -870,8 +876,10 @@ phases.each { phase ->
         if (vertices.size() >= TARGET_VERTICES) break
         if (vertices.size() % 50 == 0) System.err.print("\rVertices: ${vertices.size()}/${TARGET_VERTICES} ")
 
-        // Use activity-weighted selection
-        LogicalEdge selectedEdge = edgeRegistry.selectWeightedEdge(phase.minLen * 1.5, rnd, activityTracker)
+        // Use region-based selection
+        LogicalEdge selectedEdge = regionSelector.selectEdge(
+                edgeRegistry.edges, phase.minLen * 1.5, rnd, activityTracker)
+
         if (selectedEdge == null) {
             totalFails++
             continue
@@ -911,7 +919,6 @@ phases.each { phase ->
             if (!startWithOutward) direction *= -1
 
             long proposedEntranceWidth = segmentLen
-            if (proposedEntranceWidth < 1) proposedEntranceWidth = segmentLen
 
             def (startIdx, startNeedsSplit, startPt) = selectedEdge.findAttachmentPoint(vertices, t1)
             def (endIdx, endNeedsSplit, endPt) = selectedEdge.findAttachmentPoint(vertices, t2)
@@ -922,23 +929,18 @@ phases.each { phase ->
             long edgeDy = selectedEdge.logicalEnd[1] - selectedEdge.logicalStart[1]
             boolean extrudeVertically = Math.abs(edgeDx) >= Math.abs(edgeDy)
 
-            // Calculate edge midpoint for inward/outward test
             long edgeMidX = (startPt[0] + endPt[0]) / 2
             long edgeMidY = (startPt[1] + endPt[1]) / 2
             def edgeMidpoint = [edgeMidX, edgeMidY]
 
-            // Determine if this is an inward extrusion using JTS
             boolean isInward = isInwardExtrusion(vertices, edgeMidpoint, extrudeVertically, direction, depth, gf)
 
-            // Check nesting depth limit for inward extrusions
             if (isInward && selectedEdge.nestingDepth >= MAX_NESTING_DEPTH) {
                 rejectedNestingDepth++
                 continue
             }
 
-            // Apply fjord constraints only to inward extrusions
             if (isInward) {
-                // Constraint 1: Entrance width relative to depth
                 long minEntranceForDepth = (long)(depth * ENTRANCE_DEPTH_RATIO)
                 if (proposedEntranceWidth < minEntranceForDepth) {
                     long adjustedDepth = (long)(proposedEntranceWidth / ENTRANCE_DEPTH_RATIO)
@@ -949,11 +951,9 @@ phases.each { phase ->
                     depth = adjustedDepth
                 }
 
-                // Constraint 2: Simple area check - don't let deep concavities get too large
                 long newArea = depth * proposedEntranceWidth
                 long minEntranceForArea = (long)(Math.sqrt(newArea) * AREA_ENTRANCE_RATIO)
                 if (proposedEntranceWidth < minEntranceForArea) {
-                    // Reduce depth to bring area down
                     long maxArea = (long)Math.pow(proposedEntranceWidth / AREA_ENTRANCE_RATIO, 2)
                     long adjustedDepth = maxArea / proposedEntranceWidth
                     if (adjustedDepth < phase.minDepth) {
@@ -987,12 +987,6 @@ phases.each { phase ->
             long actualSegmentLen = extrudeVertically ?
                     Math.abs(n4[0] - n1[0]) : Math.abs(n4[1] - n1[1])
             if (actualSegmentLen < phase.minLen * 0.5) continue
-
-            def cornerPoints = [n1, n2, n3, n4]
-            if (!checkBounds(cornerPoints, MIN_BOUND, MAX_BOUND, BOUNDARY_MARGIN)) {
-                rejectedBoundary++
-                continue
-            }
 
             long featureArea = depth * actualSegmentLen
 
@@ -1028,11 +1022,6 @@ phases.each { phase ->
             }
 
             if (featureVerts.size() < 2) continue
-
-            if (!checkBounds(featureVerts, MIN_BOUND, MAX_BOUND, BOUNDARY_MARGIN)) {
-                rejectedBoundary++
-                continue
-            }
 
             boolean allOrthogonal = true
             for (int i = 0; i < featureVerts.size() - 1; i++) {
@@ -1126,7 +1115,6 @@ phases.each { phase ->
                 if (isInward) inwardCount++ else outwardCount++
                 vertices = tempVertices
 
-                // Record activity in this area
                 activityTracker.recordActivityForEdge(n1, n4, 1.0)
                 activityTracker.recordActivityForEdge(n2, n3, 0.5)
 
@@ -1150,7 +1138,6 @@ phases.each { phase ->
         if (!successOnEdge) totalFails++
     }
 
-    // Decay activity between phases
     activityTracker.decay()
 
     System.err.println "\nPhase ${phase.name} complete. Edges: ${edgeRegistry.edges.size()}"
@@ -1158,7 +1145,6 @@ phases.each { phase ->
     System.err.println "  Direction: inward=${inwardCount}, outward=${outwardCount}"
     System.err.println "  Rejected: orthogonal=${rejectedOrthogonal}, proximity=${rejectedProximity}, JTS=${rejectedJTS}, finalOrth=${rejectedFinalOrthogonal}"
     System.err.println "  Fjord constraints: entrance/area=${rejectedFjordConstraint}, nesting=${rejectedNestingDepth}"
-    System.err.println "  Boundary violations: ${rejectedBoundary}"
 }
 
 // File Names
@@ -1179,10 +1165,9 @@ System.err.println "Saving coordinates to ${csvFile.name}..."
 csvFile.withWriter { w -> vertices.each { w.writeLine("${it[0]},${it[1]}") } }
 
 // ============================================================
-// 10. RENDER ENGINE
+// 11. RENDER ENGINE
 // ============================================================
 System.err.println "Generating Image to ${imgFile.name}..."
-try {
     def img = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB)
     def g2d = img.createGraphics()
     g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
@@ -1252,6 +1237,3 @@ try {
     g2d.dispose()
     ImageIO.write(img, "PNG", imgFile)
     System.err.println "Done."
-} catch (e) {
-    e.printStackTrace()
-}
