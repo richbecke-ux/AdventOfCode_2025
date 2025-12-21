@@ -30,14 +30,14 @@ def THICKNESS = 15000
 def RANDOM_SEED = System.currentTimeMillis()
 
 // Fjord constraint parameters
-def ENTRANCE_DEPTH_RATIO = 0.35      // Entrance must be >= 35% of depth
-def AREA_ENTRANCE_RATIO = 0.25       // Entrance must be >= 25% of sqrt(total area)
-def MAX_NESTING_DEPTH = 4            // Maximum levels of nested concavity
+def ENTRANCE_DEPTH_RATIO = 0.35
+def AREA_ENTRANCE_RATIO = 0.25
+def MAX_NESTING_DEPTH = 4
 
 // Spatial distribution parameters
-def REGION_GRID_SIZE = 7             // 7x7 = 49 regions
-def ACTIVITY_DECAY = 0.7             // How much activity decays each phase (0-1)
-def ACTIVITY_PENALTY_WEIGHT = 0.3    // How much activity reduces selection probability (0-1)
+def REGION_GRID_SIZE = 7
+def ACTIVITY_DECAY = 0.7
+def ACTIVITY_PENALTY_WEIGHT = 0.3
 
 // Palettes
 def PALETTES = [
@@ -130,7 +130,7 @@ def phases = [
 ]
 
 // ============================================================
-// 4. ACTIVITY TRACKER (for spatial distribution)
+// 4. ACTIVITY TRACKER
 // ============================================================
 
 class ActivityTracker {
@@ -206,23 +206,19 @@ class RegionSelector {
         this.cellSize = canvasSize / gridSize
     }
 
-    // Get region key for a point
     String getRegionKey(long x, long y) {
         int rx = Math.max(0, Math.min(gridSize - 1, (x / cellSize).toInteger()))
         int ry = Math.max(0, Math.min(gridSize - 1, (y / cellSize).toInteger()))
         return "${rx}_${ry}"
     }
 
-    // Get region key for an edge (using midpoint)
     String getEdgeRegion(def edge) {
         long midX = (edge.logicalStart[0] + edge.logicalEnd[0]) / 2
         long midY = (edge.logicalStart[1] + edge.logicalEnd[1]) / 2
         return getRegionKey(midX, midY)
     }
 
-    // Select an edge using region-first strategy
     def selectEdge(List edges, double minLength, Random rnd, ActivityTracker activity) {
-        // Build map of region -> eligible edges
         Map<String, List> regionEdges = [:]
 
         for (edge in edges) {
@@ -235,17 +231,14 @@ class RegionSelector {
             }
         }
 
-        // Filter to non-empty regions
         def nonEmptyRegions = regionEdges.keySet().toList()
         if (nonEmptyRegions.isEmpty()) return null
 
-        // Randomly select a region (uniform probability)
         String selectedRegion = nonEmptyRegions[rnd.nextInt(nonEmptyRegions.size())]
         def eligibleEdges = regionEdges[selectedRegion]
 
         if (eligibleEdges.isEmpty()) return null
 
-        // Within the region, select edge weighted by length * activity penalty
         def weights = eligibleEdges.collect { edge ->
             double lengthWeight = edge.logicalLength
             double activityWeight = activity.getSelectionWeight(edge.logicalStart, edge.logicalEnd)
@@ -270,20 +263,19 @@ class RegionSelector {
 // ============================================================
 
 class LogicalEdge {
-    String type              // 'orthogonal', 'diagonal', 'curve'
-    List<Long> logicalStart  // Logical start point
-    List<Long> logicalEnd    // Logical end point
-    double logicalLength     // Straight-line distance
-    int vertexStartIdx       // Index of first vertex in the polygon
-    int vertexCount          // Number of vertices this edge spans
-    int direction            // Extrusion direction used (+1 or -1)
-    boolean isHoriz          // Whether the baseline is horizontal
-    int steps                // Number of steps used
+    String type
+    List<Long> logicalStart
+    List<Long> logicalEnd
+    double logicalLength
+    int vertexStartIdx
+    int vertexCount
+    int direction
+    boolean isHoriz
+    int steps
 
-    // Fjord tracking
-    int nestingDepth = 0             // How many levels deep into concave regions
-    long entranceWidth = 0           // Width of entrance to this region
-    long regionArea = 0              // Area added by this feature
+    int nestingDepth = 0
+    long entranceWidth = 0
+    long regionArea = 0
 
     List<Double> getPerpendicular() {
         double dx = logicalEnd[0] - logicalStart[0]
@@ -439,7 +431,6 @@ def pointsEqual = { p1, p2, long tolerance = 1 ->
             Math.abs(p1[1] - p2[1]) <= tolerance
 }
 
-// Check if extruding in a given direction creates a concavity (goes "inward")
 def isInwardExtrusion = { List<List<Long>> vertices, List<Long> edgeMidpoint,
                           boolean extrudeVertically, int direction, long depth,
                           GeometryFactory factory ->
@@ -459,6 +450,65 @@ def isInwardExtrusion = { List<List<Long>> vertices, List<Long> edgeMidpoint,
 
     def testPoint = factory.createPoint(new Coordinate(testX as double, testY as double))
     return poly.contains(testPoint)
+}
+
+// Compute minimum distance between two line segments
+def segmentToSegmentDistance = { List<Long> a1, List<Long> a2, List<Long> b1, List<Long> b2 ->
+    // For orthogonal segments, we can simplify
+    // Check if they're both horizontal or both vertical
+    boolean aHoriz = (a1[1] == a2[1])
+    boolean bHoriz = (b1[1] == b2[1])
+
+    if (aHoriz && bHoriz) {
+        // Both horizontal - check Y gap and X overlap
+        long yGap = Math.abs(a1[1] - b1[1])
+        long aMinX = Math.min(a1[0], a2[0])
+        long aMaxX = Math.max(a1[0], a2[0])
+        long bMinX = Math.min(b1[0], b2[0])
+        long bMaxX = Math.max(b1[0], b2[0])
+        long xOverlap = Math.min(aMaxX, bMaxX) - Math.max(aMinX, bMinX)
+
+        if (xOverlap > 0) {
+            // Segments overlap in X, so distance is just Y gap
+            return yGap as double
+        }
+        // No overlap - distance is to nearest endpoint
+    } else if (!aHoriz && !bHoriz) {
+        // Both vertical - check X gap and Y overlap
+        long xGap = Math.abs(a1[0] - b1[0])
+        long aMinY = Math.min(a1[1], a2[1])
+        long aMaxY = Math.max(a1[1], a2[1])
+        long bMinY = Math.min(b1[1], b2[1])
+        long bMaxY = Math.max(b1[1], b2[1])
+        long yOverlap = Math.min(aMaxY, bMaxY) - Math.max(aMinY, bMinY)
+
+        if (yOverlap > 0) {
+            // Segments overlap in Y, so distance is just X gap
+            return xGap as double
+        }
+        // No overlap - distance is to nearest endpoint
+    }
+
+    // For perpendicular or non-overlapping parallel segments,
+    // compute point-to-segment distances for all endpoints
+    double d1 = java.awt.geom.Line2D.ptSegDist(
+            b1[0] as double, b1[1] as double,
+            b2[0] as double, b2[1] as double,
+            a1[0] as double, a1[1] as double)
+    double d2 = java.awt.geom.Line2D.ptSegDist(
+            b1[0] as double, b1[1] as double,
+            b2[0] as double, b2[1] as double,
+            a2[0] as double, a2[1] as double)
+    double d3 = java.awt.geom.Line2D.ptSegDist(
+            a1[0] as double, a1[1] as double,
+            a2[0] as double, a2[1] as double,
+            b1[0] as double, b1[1] as double)
+    double d4 = java.awt.geom.Line2D.ptSegDist(
+            a1[0] as double, a1[1] as double,
+            a2[0] as double, a2[1] as double,
+            b2[0] as double, b2[1] as double)
+
+    return Math.min(Math.min(d1, d2), Math.min(d3, d4))
 }
 
 def generateLinearStairVertices = { start, end, int steps ->
@@ -860,7 +910,6 @@ phases.each { phase ->
     int totalFails = 0
     int maxTotalFails = (phase.name == "Micro") ? 5000 : 1500
 
-    // Diagnostics
     def featureTypeCounts = [box: 0, pyramid: 0, round: 0]
     int rejectedOrthogonal = 0
     int rejectedProximity = 0
@@ -876,7 +925,6 @@ phases.each { phase ->
         if (vertices.size() >= TARGET_VERTICES) break
         if (vertices.size() % 50 == 0) System.err.print("\rVertices: ${vertices.size()}/${TARGET_VERTICES} ")
 
-        // Use region-based selection
         LogicalEdge selectedEdge = regionSelector.selectEdge(
                 edgeRegistry.edges, phase.minLen * 1.5, rnd, activityTracker)
 
@@ -1049,10 +1097,13 @@ phases.each { phase ->
             int edgeStartIdx = selectedEdge.vertexStartIdx
             int edgeEndIdx = edgeStartIdx + selectedEdge.vertexCount
 
+            // Check proximity: feature points to existing edges
             for (int ci : candidates) {
                 if (ci >= edgeStartIdx && ci <= edgeEndIdx) continue
                 def cv1 = vertices[ci]
                 def cv2 = vertices[(ci + 1) % vertices.size()]
+
+                // Point-to-segment: feature points against existing edges
                 for (def fp : featureVerts) {
                     double dist = java.awt.geom.Line2D.ptSegDist(
                             cv1[0] as double, cv1[1] as double,
@@ -1065,6 +1116,8 @@ phases.each { phase ->
                     }
                 }
                 if (!proximityOk) break
+
+                // Point-to-segment: existing vertices against feature edges
                 for (int fi = 0; fi < featureVerts.size() - 1; fi++) {
                     def fv1 = featureVerts[fi]
                     def fv2 = featureVerts[fi + 1]
@@ -1074,6 +1127,18 @@ phases.each { phase ->
                             cv1[0] as double, cv1[1] as double
                     )
                     if (dist < phase.minGap && dist > 1) {
+                        proximityOk = false
+                        break
+                    }
+                }
+                if (!proximityOk) break
+
+                // NEW: Segment-to-segment distance check
+                for (int fi = 0; fi < featureVerts.size() - 1; fi++) {
+                    def fv1 = featureVerts[fi]
+                    def fv2 = featureVerts[fi + 1]
+                    double segDist = segmentToSegmentDistance(fv1, fv2, cv1, cv2)
+                    if (segDist < phase.minGap && segDist > 1) {
                         proximityOk = false
                         break
                     }
@@ -1168,72 +1233,73 @@ csvFile.withWriter { w -> vertices.each { w.writeLine("${it[0]},${it[1]}") } }
 // 11. RENDER ENGINE
 // ============================================================
 System.err.println "Generating Image to ${imgFile.name}..."
-    def img = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB)
-    def g2d = img.createGraphics()
-    g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-    g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
 
-    def center = new Point2D.Float(IMAGE_SIZE / 2 as float, IMAGE_SIZE / 2 as float)
-    float radius = IMAGE_SIZE * 0.8f
-    float[] dist = [0.0f, 1.0f]
-    Color[] colorsArr = [currentPalette.bg.brighter(), currentPalette.bg]
-    RadialGradientPaint bgPaint = new RadialGradientPaint(center, radius, dist, colorsArr)
-    g2d.setPaint(bgPaint)
-    g2d.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE)
+def img = new BufferedImage(IMAGE_SIZE, IMAGE_SIZE, BufferedImage.TYPE_INT_RGB)
+def g2d = img.createGraphics()
+g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
 
-    double sc = IMAGE_SIZE / CANVAS_SIZE
+def center = new Point2D.Float(IMAGE_SIZE / 2 as float, IMAGE_SIZE / 2 as float)
+float radius = IMAGE_SIZE * 0.8f
+float[] dist = [0.0f, 1.0f]
+Color[] colorsArr = [currentPalette.bg.brighter(), currentPalette.bg]
+RadialGradientPaint bgPaint = new RadialGradientPaint(center, radius, dist, colorsArr)
+g2d.setPaint(bgPaint)
+g2d.fillRect(0, 0, IMAGE_SIZE, IMAGE_SIZE)
 
-    Path2D poly = new Path2D.Double()
-    vertices.eachWithIndex { v, i ->
-        double x = v[0] * sc
-        double y = v[1] * sc
-        if (i == 0) poly.moveTo(x, y) else poly.lineTo(x, y)
-    }
-    poly.closePath()
+double sc = IMAGE_SIZE / CANVAS_SIZE
 
-    Rectangle bounds = poly.getBounds()
-    GradientPaint fillGrad = new GradientPaint(
-            (float) bounds.getCenterX(), (float) bounds.getMinY(), currentPalette.fill1,
-            (float) bounds.getCenterX(), (float) bounds.getMaxY(), currentPalette.fill2
-    )
-    g2d.setPaint(fillGrad)
-    g2d.fill(poly)
+Path2D poly = new Path2D.Double()
+vertices.eachWithIndex { v, i ->
+    double x = v[0] * sc
+    double y = v[1] * sc
+    if (i == 0) poly.moveTo(x, y) else poly.lineTo(x, y)
+}
+poly.closePath()
 
-    g2d.setClip(poly)
-    g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 40))
-    int scanSpacing = (IMAGE_SIZE / 200).toInteger()
-    for (int i = 0; i < IMAGE_SIZE; i += scanSpacing) {
-        g2d.drawLine(0, i, IMAGE_SIZE, i)
-    }
-    g2d.setClip(null)
+Rectangle bounds = poly.getBounds()
+GradientPaint fillGrad = new GradientPaint(
+        (float) bounds.getCenterX(), (float) bounds.getMinY(), currentPalette.fill1,
+        (float) bounds.getCenterX(), (float) bounds.getMaxY(), currentPalette.fill2
+)
+g2d.setPaint(fillGrad)
+g2d.fill(poly)
 
-    float strokeWidth = (float) (1000 * sc)
-    g2d.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
-    g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 60))
-    g2d.draw(poly)
+g2d.setClip(poly)
+g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 40))
+int scanSpacing = (IMAGE_SIZE / 200).toInteger()
+for (int i = 0; i < IMAGE_SIZE; i += scanSpacing) {
+    g2d.drawLine(0, i, IMAGE_SIZE, i)
+}
+g2d.setClip(null)
 
-    g2d.setStroke(new BasicStroke((float) (strokeWidth * 0.15f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
-    g2d.setColor(currentPalette.glow)
-    g2d.draw(poly)
+float strokeWidth = (float) (1000 * sc)
+g2d.setStroke(new BasicStroke(strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+g2d.setColor(new Color(currentPalette.glow.getRed(), currentPalette.glow.getGreen(), currentPalette.glow.getBlue(), 60))
+g2d.draw(poly)
 
-    g2d.setColor(currentPalette.accent)
-    g2d.setFont(new Font("Monospaced", Font.BOLD, 40))
-    g2d.drawString("ENTITY: ${shapeType.toUpperCase()}-CLASS FRACTAL", 100, 100)
-    g2d.setFont(new Font("Monospaced", Font.PLAIN, 24))
-    g2d.drawString("VERTICES: ${vertices.size()} // PALETTE: ${currentPalette.name.toUpperCase()} // LOGICAL EDGES: ${edgeRegistry.edges.size()}", 100, 140)
+g2d.setStroke(new BasicStroke((float) (strokeWidth * 0.15f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND))
+g2d.setColor(currentPalette.glow)
+g2d.draw(poly)
 
-    int cLen = 150
-    int pad = 50
-    g2d.setStroke(new BasicStroke(6.0f))
-    g2d.drawLine(pad, pad, pad + cLen, pad)
-    g2d.drawLine(pad, pad, pad, pad + cLen)
-    g2d.drawLine(IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad - cLen, pad)
-    g2d.drawLine(IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad, pad + cLen)
-    g2d.drawLine(pad, IMAGE_SIZE - pad, pad + cLen, IMAGE_SIZE - pad)
-    g2d.drawLine(pad, IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad - cLen)
-    g2d.drawLine(IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad - cLen, IMAGE_SIZE - pad)
-    g2d.drawLine(IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad - cLen)
+g2d.setColor(currentPalette.accent)
+g2d.setFont(new Font("Monospaced", Font.BOLD, 40))
+g2d.drawString("ENTITY: ${shapeType.toUpperCase()}-CLASS FRACTAL", 100, 100)
+g2d.setFont(new Font("Monospaced", Font.PLAIN, 24))
+g2d.drawString("VERTICES: ${vertices.size()} // PALETTE: ${currentPalette.name.toUpperCase()} // LOGICAL EDGES: ${edgeRegistry.edges.size()}", 100, 140)
 
-    g2d.dispose()
-    ImageIO.write(img, "PNG", imgFile)
-    System.err.println "Done."
+int cLen = 150
+int pad = 50
+g2d.setStroke(new BasicStroke(6.0f))
+g2d.drawLine(pad, pad, pad + cLen, pad)
+g2d.drawLine(pad, pad, pad, pad + cLen)
+g2d.drawLine(IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad - cLen, pad)
+g2d.drawLine(IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad, pad + cLen)
+g2d.drawLine(pad, IMAGE_SIZE - pad, pad + cLen, IMAGE_SIZE - pad)
+g2d.drawLine(pad, IMAGE_SIZE - pad, pad, IMAGE_SIZE - pad - cLen)
+g2d.drawLine(IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad - cLen, IMAGE_SIZE - pad)
+g2d.drawLine(IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad, IMAGE_SIZE - pad - cLen)
+
+g2d.dispose()
+ImageIO.write(img, "PNG", imgFile)
+System.err.println "Done."
