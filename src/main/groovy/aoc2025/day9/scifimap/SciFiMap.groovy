@@ -79,7 +79,7 @@ if (args.any { it == '-h' }) shapeType = 'h'
 if (args.any { it == '-c' }) shapeType = 'c'
 if (args.any { it == '-q' }) shapeType = 'q'
 if (!shapeType) shapeType = shapes[rnd.nextInt(shapes.size())]
-shapeType = 'π'
+
 def paletteId = -1
 def pIndex = args.findIndexOf { it == '-p' }
 if (pIndex > -1 && pIndex + 1 < args.size() && args[pIndex+1].isNumber()) {
