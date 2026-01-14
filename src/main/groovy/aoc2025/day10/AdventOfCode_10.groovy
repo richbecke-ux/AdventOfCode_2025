@@ -11,16 +11,9 @@ class Node {
     List<Integer> remainingMasks
     List<Integer> path = []
     int level
-
-    Node(int state, List<Integer> remainingMasks, List<Integer> path, int level) {
-        this.state = state
-        this.remainingMasks = remainingMasks
-        this.path = path
-        this.level = level
-    }
 }
 
-// Converts a diagram string to an integer mask
+
 int diagramToBits(String diagram) {
     int bits = 0
     diagram.eachWithIndex { symbol, i ->
@@ -29,14 +22,9 @@ int diagramToBits(String diagram) {
     return bits
 }
 
-String bitsToDiagram(int bits, int length) {
-    return (0..<length).collect { i -> (bits & (1 << i)) ? '#' : '.' }.join('')
-}
-
-
 def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
 
-    Node root = new Node(0, bitMaskList, [], 0)
+    Node root = new Node(state: 0, remainingMasks: bitMaskList, path: [], level: 0)
 
     List<List<Node>> levels = []
     List<Node> level1 = []
@@ -48,7 +36,7 @@ def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
             def nextRemaining = []
             root.remainingMasks.eachWithIndex { m, idx -> if(idx != i) nextRemaining << m }
 
-            Node child = new Node(nextState, nextRemaining, [mask], 1)
+            Node child = new Node(state: nextState, remainingMasks: nextRemaining, path: [mask], level: 1)
 
             if (nextState == targetState) return child
             level1 << child
@@ -70,7 +58,7 @@ def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
                 def nextRemaining = []
                 parent.remainingMasks.eachWithIndex { m, idx -> if(idx != i) nextRemaining << m }
 
-                Node child = new Node(nextState, nextRemaining, parent.path + mask, parent.level + 1)
+                Node child = new Node(state: nextState, remainingMasks: nextRemaining, path: parent.path + mask, level: parent.level + 1)
 
                 if (nextState == targetState) return child
 
