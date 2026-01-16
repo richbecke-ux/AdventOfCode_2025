@@ -24,6 +24,8 @@ int diagramToBits(String diagram) {
 
 def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
 
+    Set<Integer> visited = [0] as Set
+
     Node root = new Node(state: 0, remainingMasks: bitMaskList, path: [], level: 0)
 
     List<List<Node>> levels = []
@@ -33,13 +35,16 @@ def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
         int mask = root.remainingMasks[i]
         if ((mask & targetState) != 0) {
             int nextState = root.state ^ mask
-            def nextRemaining = []
-            root.remainingMasks.eachWithIndex { m, idx -> if(idx != i) nextRemaining << m }
+            if (!visited.contains(nextState)) {
+                visited << nextState
+                def nextRemaining = []
+                root.remainingMasks.eachWithIndex { m, idx -> if (idx != i) nextRemaining << m }
 
-            Node child = new Node(state: nextState, remainingMasks: nextRemaining, path: [mask], level: 1)
+                Node child = new Node(state: nextState, remainingMasks: nextRemaining, path: [mask], level: 1)
 
-            if (nextState == targetState) return child
-            level1 << child
+                if (nextState == targetState) return child
+                level1 << child
+            }
         }
     }
 
@@ -54,6 +59,8 @@ def solve(int targetState, List<Integer> bitMaskList, int diagLen) {
             for (int i = 0; i < parent.remainingMasks.size(); i++) {
                 int mask = parent.remainingMasks[i]
                 int nextState = parent.state ^ mask
+                if (visited.contains(nextState)) continue
+                visited << nextState
 
                 def nextRemaining = []
                 parent.remainingMasks.eachWithIndex { m, idx -> if(idx != i) nextRemaining << m }
